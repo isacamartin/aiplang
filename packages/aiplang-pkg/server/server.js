@@ -103,7 +103,7 @@ async function sendMail(opts) {
     return { messageId: 'mock-' + uuid() }
   }
   return MAIL_TRANSPORTER.sendMail({
-    from: MAIL_CONFIG?.from || 'noreply@aiplang.app',
+    from: MAIL_CONFIG?.from || process.env.MAIL_FROM || 'noreply@localhost',
     ...opts
   })
 }
@@ -1372,7 +1372,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.1.3',
+    status:'ok', version:'2.5.0',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

@@ -29,7 +29,15 @@ function persistDB() {
   if (!_db || !DB_FILE || DB_FILE === ':memory:') return
   try { fs.writeFileSync(DB_FILE, Buffer.from(_db.export())) } catch {}
 }
-function dbRun(sql, params = []) { _db.run(sql, params); persistDB() }
+let _dirty = false, _persistTimer = null
+function dbRun(sql, params = []) {
+  _db.run(sql, params)
+  _dirty = true
+  if (!_persistTimer) _persistTimer = setTimeout(() => {
+    if (_dirty) { try { persistDB() } catch {} _dirty = false }
+    _persistTimer = null
+  }, 200)
+}
 function dbAll(sql, params = []) {
   const stmt = _db.prepare(sql); stmt.bind(params)
   const rows = []; while (stmt.step()) rows.push(stmt.getAsObject()); stmt.free()
@@ -95,7 +103,7 @@ async function sendMail(opts) {
     return { messageId: 'mock-' + uuid() }
   }
   return MAIL_TRANSPORTER.sendMail({
-    from: MAIL_CONFIG?.from || 'noreply@aiplang.app',
+    from: MAIL_CONFIG?.from || process.env.MAIL_FROM || 'noreply@localhost',
     ...opts
   })
 }
@@ -135,7 +143,10 @@ class Model {
     if (this.softDelete) conditions.push('deleted_at IS NULL')
     if (opts.where) { conditions.push(opts.where); if (opts.whereParams) params.push(...opts.whereParams) }
     if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`
-    if (opts.order)  sql += ` ORDER BY ${opts.order}`
+    if (opts.order) {
+      const safeOrder = /^[a-zA-Z_][a-zA-Z0-9_]*(\s+(asc|desc))?$/i
+      if (safeOrder.test(String(opts.order))) sql += ` ORDER BY ${opts.order}`
+    }
     if (opts.limit)  sql += ` LIMIT ${opts.limit}`
     if (opts.offset) sql += ` OFFSET ${opts.offset}`
     return dbAll(sql, params)
@@ -276,6 +287,15 @@ function migrateModels(models) {
     if (!cols.some(c=>c.startsWith('updated_at'))) cols.push('updated_at TEXT')
     if (model.softDelete) { if (!cols.some(c=>c.startsWith('deleted_at'))) cols.push('deleted_at TEXT') }
     try { dbRun(`CREATE TABLE IF NOT EXISTS ${table} (${cols.join(', ')})`) } catch {}
+    // Auto-index on unique + indexed fields
+    for (const f of model.fields) {
+      const colName = toCol(f.name)
+      if (f.modifiers.includes('unique') || f.modifiers.includes('index')) {
+        try { dbRun(`CREATE INDEX IF NOT EXISTS idx_${table}_${colName} ON ${table}(${colName})`) } catch {}
+      }
+    }
+    // Always index created_at for pagination performance
+    try { dbRun(`CREATE INDEX IF NOT EXISTS idx_${table}_created_at ON ${table}(created_at)`) } catch {}
     console.log(`[aiplang] ✓  ${table} (${cols.length} cols${model.softDelete ? ', soft-delete' : ''})`)
     MODEL_DEFS[model.name] = { softDelete: model.softDelete, timestamps: true }
   }
@@ -796,6 +816,11 @@ class AiplangServer {
       res.writeHead(429, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Too many requests' })); return
     }
+    // Auto rate-limit on auth endpoints
+    if (this._authRateLimit && this._authRateLimit(req)) {
+      res.writeHead(429, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Too many requests. Try again in 1 minute.' })); return
+    }
 
     // CORS — use plugin config if set, otherwise allow all
     const origins = this._corsOrigins || ['*']
@@ -1294,6 +1319,16 @@ async function startServer(aipFile, port = 3000) {
   // Events
   for (const ev of app.events) on(ev.event, (data) => console.log(`[aiplang:event] ${ev.event}:`, ev.action))
 
+  // Auth rate limiting (automatic — 20 req/min per IP on /api/auth/*)
+  const _authAttempts = {}
+  srv._authRateLimit = (req) => {
+    if (!req.path?.includes('/api/auth/')) return false
+    const ip = req.socket?.remoteAddress || 'unknown'
+    const key = `${ip}:${Math.floor(Date.now() / 60000)}`
+    _authAttempts[key] = (_authAttempts[key] || 0) + 1
+    return _authAttempts[key] > 20
+  }
+
   // Routes
   for (const route of app.apis) {
     compileRoute(route, srv)
@@ -1337,7 +1372,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.1.3',
+    status:'ok', version:'2.5.0',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

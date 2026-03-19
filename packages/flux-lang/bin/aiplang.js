@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.1.1'
+const VERSION     = '2.1.2'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -111,10 +111,9 @@ if (cmd==='init') {
     const src=path.join(RUNTIME_DIR,f); if(fs.existsSync(src)) fs.copyFileSync(src,path.join(dir,'public',f))
   }
   fs.writeFileSync(path.join(dir,'public','index.html'),`<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title></head>
-<body><div id="app"></div><script src="aiplang-runtime.js"></script><script>
-fetch('../pages/home.flux').then(r=>r.text()).then(src=>FLUX.boot(src,document.getElementById('app')))
-</script></body></html>`)
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title>
+<meta http-equiv="refresh" content="0; url=/">
+</head><body><p>Run <code>npx aiplang serve</code> to start the dev server.</p></body></html>`)
   fs.writeFileSync(path.join(dir,'pages','home.flux'), (TEMPLATES[tplName]||TEMPLATES.default)(name, year))
   fs.writeFileSync(path.join(dir,'package.json'), JSON.stringify({name,version:'0.1.0',scripts:{dev:'npx aiplang serve',build:'npx aiplang build pages/ --out dist/'},devDependencies:{'aiplang':`^${VERSION}`}},null,2))
   fs.writeFileSync(path.join(dir,'.gitignore'),'dist/\nnode_modules/\n')
@@ -209,7 +208,7 @@ if (cmd==='serve'||cmd==='dev') {
 // ── Dev server (full-stack) ──────────────────────────────────────
 if (cmd === 'start' || cmd === 'run') {
   const aipFile = args[0]
-  if (!aipFile || !fs.existsSync(fluxFile)) {
+  if (!aipFile || !fs.existsSync(aipFile)) {
     console.error(`\n  ✗  Usage: aiplang start <app.flux>\n`)
     process.exit(1)
   }

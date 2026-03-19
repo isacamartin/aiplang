@@ -1,5 +1,5 @@
 /**
- * flux-hydrate.js — FLUX Hydration Runtime v1.1
+ * aiplang-hydrate.js — aiplang Hydration Runtime v2.1
  * Handles: state, queries, table, list, form, if, edit, delete, btn, select
  */
 
@@ -64,7 +64,7 @@ async function runQuery(q) {
     applyAction(data, q.target, q.action)
     return data
   } catch (e) {
-    console.warn('[FLUX]', q.method, path, e.message)
+    console.warn('[aiplang]', q.method, path, e.message)
     return null
   }
 }

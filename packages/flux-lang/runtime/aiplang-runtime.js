@@ -1,10 +1,10 @@
 /**
- * flux-runtime.js — FLUX Runtime v1.0
+ * aiplang-runtime.js — aiplang Runtime v2.1
  * Reactive state + SPA routing + DOM engine + query engine
  * Zero dependencies. ~28KB unminified.
  */
 
-const FLUX = (() => {
+const AIPLANG = (() => {
 
 // ─────────────────────────────────────────────────────────────
 // ICONS
@@ -165,7 +165,7 @@ class QueryEngine {
       this._applyResult(data, q.target, q.action)
       return data
     } catch (e) {
-      console.warn('[FLUX] query failed:', q.method, path, e.message)
+      console.warn('[aiplang] query failed:', q.method, path, e.message)
       return null
     }
   }
@@ -1078,7 +1078,7 @@ function boot(src, container) {
 
   const pages = parseFlux(src)
   if (!pages.length) {
-    container.textContent = '[FLUX] no pages found'
+    container.textContent = '[aiplang] no pages found'
     return
   }
 
@@ -1095,6 +1095,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (script) {
     const targetSel = script.getAttribute('target') || '#app'
     const container = document.querySelector(targetSel)
-    if (container) FLUX.boot(script.textContent, container)
+    if (container) AIPLANG.boot(script.textContent, container)
   }
 })

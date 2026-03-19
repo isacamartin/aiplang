@@ -1,7 +1,7 @@
 {
   "name": "aiplang",
-  "version": "1.0.1",
-  "description": "AI-first web language. Describe an app to Claude, get it running in seconds.",
+  "version": "2.0.0",
+  "description": "AI-first full-stack language. Frontend + Backend + DB + Auth in one file. Competes with Laravel.",
   "keywords": [
     "flux",
     "ai",
@@ -29,10 +29,16 @@
   "files": [
     "bin/",
     "runtime/",
+    "server/",
     "README.md",
     "FLUX-PROJECT-KNOWLEDGE.md"
   ],
   "engines": {
     "node": ">=16"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "sql.js": "^1.10.3"
   }
 }

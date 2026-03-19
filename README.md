@@ -22,7 +22,7 @@ npm install -g aiplang
 
 ## For Claude
 
-Upload `FLUX-PROJECT-KNOWLEDGE.md` to a Claude Project to make Claude generate FLUX automatically.
+Upload `aiplang-knowledge.md` to a Claude Project to make Claude generate FLUX automatically.
 
 ## Docs
 

@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '1.0.1'
+const VERSION     = '2.0.0'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -40,6 +40,10 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
     npx aiplang build [dir/file]            compile → static HTML
     npx aiplang new <page>                  new page template
     npx aiplang --version
+
+  Full-stack:
+    npx aiplang start app.flux           start full-stack server (API + DB + frontend)
+    PORT=8080 aiplang start app.flux     custom port
 
   Customization:
     ~theme accent=#7c3aed radius=1.5rem font=Syne bg=#000 text=#fff
@@ -198,6 +202,27 @@ if (cmd==='serve'||cmd==='dev') {
     res.writeHead(200,{'Content-Type':MIME[path.extname(fp)]||'application/octet-stream','Access-Control-Allow-Origin':'*'})
     res.end(content)
   }).listen(port,()=>console.log(`\n  ✓  aiplang dev server\n\n  →  http://localhost:${port}\n\n  Hot reload ON — edit .flux files and browser refreshes.\n  Ctrl+C to stop.\n`))
+  return
+}
+
+// ── Dev server (full-stack) ──────────────────────────────────────
+if (cmd === 'start' || cmd === 'run') {
+  const fluxFile = args[0]
+  if (!fluxFile || !fs.existsSync(fluxFile)) {
+    console.error(`\n  ✗  Usage: aiplang start <app.flux>\n`)
+    process.exit(1)
+  }
+  const port = parseInt(process.env.PORT || args[1] || '3000')
+  const serverPath = path.join(__dirname, '..', '..', 'aiplang-server', 'server.js')
+  if (!fs.existsSync(serverPath)) {
+    console.error(`\n  ✗  Full-stack server not found.`)
+    console.error(`  Install: npm install -g aiplang-server\n`)
+    process.exit(1)
+  }
+  console.log(`\n  aiplang full-stack server\n`)
+  require('child_process').spawn(process.execPath, [serverPath, fluxFile, port], {
+    stdio: 'inherit', env: { ...process.env, PORT: port }
+  })
   return
 }
 

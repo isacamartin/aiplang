@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.4.1'
+const VERSION     = '2.5.0'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -454,7 +454,7 @@ if (cmd==='build') {
   } else if(input.endsWith('.aiplang')&&fs.existsSync(input)){ files.push(input) }
   if(!files.length){console.error(`\n  ✗  No .aiplang files in: ${input}\n`);process.exit(1)}
   const src=files.map(f=>fs.readFileSync(f,'utf8')).join('\n---\n')
-  const pages=parseFlux(src)
+  const pages=parsePages(src)
   if(!pages.length){console.error('\n  ✗  No pages found.\n');process.exit(1)}
   fs.mkdirSync(outDir,{recursive:true})
   console.log(`\n  aiplang build v${VERSION} — ${files.length} file(s)\n`)
@@ -542,7 +542,7 @@ process.exit(1)
 // PARSER
 // ═════════════════════════════════════════════════════════════════
 
-function parseFlux(src) {
+function parsePages(src) {
   return src.split(/\n---\n/).map(s=>parsePage(s.trim())).filter(Boolean)
 }
 

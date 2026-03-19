@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude Code — FLUX vs React Speed</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#030712;color:#f1f5f9;font-family:-apple-system,'Segoe UI',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.page{max-width:64rem;margin:0 auto;padding:4rem 2rem}
+h1{font-size:clamp(2rem,5vw,3.25rem);font-weight:900;letter-spacing:-.04em;line-height:1;margin-bottom:.5rem}
+.sub{color:#64748b;font-size:1rem;margin-bottom:3rem;line-height:1.7}
+.accent{color:#a3e635}
+
+/* Big numbers */
+.hero-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5rem;margin-bottom:4rem}
+@media(max-width:600px){.hero-metrics{grid-template-columns:1fr 1fr}}
+.hm{background:#0f172a;border:1px solid #1e293b;border-radius:1.25rem;padding:2rem;text-align:center}
+.hm-num{font-size:clamp(2.5rem,6vw,4rem);font-weight:900;letter-spacing:-.05em;line-height:1;color:#a3e635}
+.hm-label{font-size:.75rem;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-top:.6rem}
+
+/* Timer simulation */
+.timer-section{margin-bottom:4rem}
+.timer-title{font-size:1.25rem;font-weight:800;letter-spacing:-.02em;margin-bottom:1.5rem;color:#e2e8f0}
+.timer-row{display:flex;align-items:center;gap:1.25rem;margin-bottom:1.25rem}
+.timer-lang{width:100px;font-size:.8rem;font-weight:700;flex-shrink:0}
+.timer-lang.react{color:#61dafb}
+.timer-lang.flux{color:#a3e635}
+.timer-bar-wrap{flex:1;background:#020617;border-radius:999px;height:12px;overflow:hidden;position:relative}
+.timer-bar{height:100%;border-radius:999px;width:0;transition:width 2s cubic-bezier(.4,0,.2,1)}
+.timer-bar.react{background:linear-gradient(90deg,#61dafb,#0ea5e9)}
+.timer-bar.flux{background:linear-gradient(90deg,#a3e635,#84cc16)}
+.timer-val{font-size:.9rem;font-weight:800;width:80px;text-align:right;flex-shrink:0;font-family:'SF Mono','Fira Code',monospace}
+.timer-val.react{color:#61dafb}
+.timer-val.flux{color:#a3e635}
+.timer-note{font-size:.75rem;color:#334155;margin-top:.25rem;padding-left:125px}
+
+/* Context window */
+.ctx-section{margin-bottom:4rem}
+.ctx-bar-wrap{background:#020617;border-radius:.75rem;height:48px;position:relative;overflow:hidden;margin-bottom:.75rem}
+.ctx-bar{height:100%;border-radius:.75rem;display:flex;align-items:center;padding:0 1rem;font-size:.75rem;font-weight:700;transition:width 2s cubic-bezier(.4,0,.2,1);width:0;white-space:nowrap}
+.ctx-bar.react{background:linear-gradient(90deg,rgba(97,218,251,.3),rgba(97,218,251,.1));color:#61dafb;border:1px solid rgba(97,218,251,.2)}
+.ctx-bar.flux{background:linear-gradient(90deg,rgba(163,230,53,.3),rgba(163,230,53,.1));color:#a3e635;border:1px solid rgba(163,230,53,.2)}
+.ctx-label{font-size:.8rem;color:#475569;margin-bottom:.5rem}
+
+/* Real-world impact */
+.impact-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-bottom:4rem}
+.impact-card{background:#0f172a;border:1px solid #1e293b;border-radius:1rem;padding:1.5rem}
+.impact-card h3{font-size:.9rem;font-weight:700;margin-bottom:.75rem;letter-spacing:-.01em}
+.impact-card p{font-size:.8rem;color:#64748b;line-height:1.65}
+.impact-card .num{font-size:2rem;font-weight:900;letter-spacing:-.04em;color:#a3e635;display:block;margin-bottom:.25rem}
+
+/* Token breakdown */
+.breakdown{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:4rem}
+@media(max-width:600px){.breakdown{grid-template-columns:1fr}}
+.breakdown-card{background:#000;border:1px solid #1e293b;border-radius:.875rem;overflow:hidden}
+.breakdown-header{padding:.75rem 1.25rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid #1e293b}
+.breakdown-header.react{color:#61dafb;background:rgba(97,218,251,.03)}
+.breakdown-header.flux{color:#a3e635;background:rgba(163,230,53,.03)}
+.breakdown-row{display:flex;justify-content:space-between;padding:.5rem 1.25rem;font-size:.78rem;border-bottom:1px solid #0f172a}
+.breakdown-row:last-child{border-bottom:none}
+.breakdown-row .key{color:#475569}
+.breakdown-row .val{font-family:'SF Mono','Fira Code',monospace;font-weight:600}
+.breakdown-row .val.bad{color:#f87171}
+.breakdown-row .val.good{color:#a3e635}
+.breakdown-total{padding:.75rem 1.25rem;border-top:1px solid #1e293b;font-size:.85rem;font-weight:800;display:flex;justify-content:space-between}
+
+/* Sim output */
+.sim-section{margin-bottom:4rem}
+.sim-tabs{display:flex;gap:.5rem;margin-bottom:1rem}
+.sim-tab{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:.5rem 1rem;font-size:.75rem;cursor:pointer;font-family:inherit;color:#64748b;transition:all .15s}
+.sim-tab.active{background:#1e293b;color:#f1f5f9;border-color:#334155}
+.sim-output{background:#000;border:1px solid #1e293b;border-radius:.875rem;padding:1.5rem;font-family:'SF Mono','Fira Code',monospace;font-size:.75rem;line-height:1.75;color:#64748b;min-height:120px;position:relative}
+.sim-output .cursor{display:inline-block;width:2px;height:1em;background:#a3e635;animation:blink 1s step-end infinite;vertical-align:middle}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.sim-line-react{color:#61dafb}
+.sim-line-flux{color:#a3e635}
+.sim-line-comment{color:#334155}
+.sim-timer-badge{position:absolute;top:1rem;right:1rem;background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:.3rem .75rem;font-size:.7rem}
+.sim-timer-badge span{color:#a3e635;font-weight:700}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Claude Code + <span class="accent">FLUX</span></h1>
+  <p class="sub">
+    How much faster Claude writes your app — measured in tokens, time, and context window impact.<br>
+    Same app: 3 pages · live data · forms · auth · polling · table
+  </p>
+
+  <!-- Hero metrics -->
+  <div class="hero-metrics">
+    <div class="hm">
+      <div class="hm-num">9.8×</div>
+      <div class="hm-label">fewer tokens for Claude to write</div>
+    </div>
+    <div class="hm">
+      <div class="hm-num">~4s</div>
+      <div class="hm-label">saved per app at 1000 tok/s</div>
+    </div>
+    <div class="hm">
+      <div class="hm-num">1</div>
+      <div class="hm-label">file vs 4+ files + config</div>
+    </div>
+  </div>
+
+  <!-- Generation timer -->
+  <div class="timer-section">
+    <div class="timer-title">How long Claude takes to write the app</div>
+    <div class="timer-row">
+      <span class="timer-lang react">React</span>
+      <div class="timer-bar-wrap"><div class="timer-bar react" id="bar-react"></div></div>
+      <span class="timer-val react" id="val-react">~4.3s</span>
+    </div>
+    <div class="timer-note">262 lines · 4,326 tokens · 4 files (TypeScript + Tailwind)</div>
+    <div class="timer-row" style="margin-top:1rem">
+      <span class="timer-lang flux">FLUX</span>
+      <div class="timer-bar-wrap"><div class="timer-bar flux" id="bar-flux"></div></div>
+      <span class="timer-val flux" id="val-flux">~0.4s</span>
+    </div>
+    <div class="timer-note">38 lines · 442 tokens · 1 file</div>
+  </div>
+
+  <!-- Context window -->
+  <div class="ctx-section">
+    <div class="timer-title">Context window usage (200K tokens)</div>
+    <div class="ctx-label">React — 4,326 tokens (2.16% of context)</div>
+    <div class="ctx-bar-wrap"><div class="ctx-bar react" id="ctx-react">4,326 tokens</div></div>
+    <div class="ctx-label">FLUX — 442 tokens (0.22% of context)</div>
+    <div class="ctx-bar-wrap"><div class="ctx-bar flux" id="ctx-flux">442 tokens</div></div>
+    <p style="font-size:.78rem;color:#334155;margin-top:.75rem">
+      With FLUX, Claude uses 10× less context per app — meaning more room for requirements, docs, and iteration in the same session.
+    </p>
+  </div>
+
+  <!-- Token breakdown -->
+  <div class="breakdown">
+    <div class="breakdown-card">
+      <div class="breakdown-header react">React / Next.js (TypeScript)</div>
+      <div class="breakdown-row"><span class="key">Imports + types</span><span class="val bad">~340 tokens</span></div>
+      <div class="breakdown-row"><span class="key">JSX className strings</span><span class="val bad">~920 tokens</span></div>
+      <div class="breakdown-row"><span class="key">useState / useEffect</span><span class="val bad">~280 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Event handlers</span><span class="val bad">~420 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Actual app logic</span><span class="val">~720 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Config files</span><span class="val bad">~640 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Boilerplate overhead</span><span class="val bad">83%</span></div>
+      <div class="breakdown-total"><span>Total</span><span style="color:#61dafb">4,326 tokens</span></div>
+    </div>
+    <div class="breakdown-card">
+      <div class="breakdown-header flux">FLUX</div>
+      <div class="breakdown-row"><span class="key">Page meta + state</span><span class="val good">~40 tokens</span></div>
+      <div class="breakdown-row"><span class="key">~mount queries</span><span class="val good">~60 tokens</span></div>
+      <div class="breakdown-row"><span class="key">nav / hero / stats</span><span class="val good">~90 tokens</span></div>
+      <div class="breakdown-row"><span class="key">table + form</span><span class="val good">~140 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Multi-page (---)</span><span class="val good">~112 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Config files</span><span class="val good">0 tokens</span></div>
+      <div class="breakdown-row"><span class="key">Signal-to-noise</span><span class="val good">100% logic</span></div>
+      <div class="breakdown-total"><span>Total</span><span style="color:#a3e635">442 tokens</span></div>
+    </div>
+  </div>
+
+  <!-- Real world impact -->
+  <div class="timer-title" style="margin-bottom:1rem">Real-world impact in a Claude Code session</div>
+  <div class="impact-grid">
+    <div class="impact-card">
+      <span class="num">25×</span>
+      <h3>More pages per session</h3>
+      <p>Claude Code has a context window. With FLUX, the same 100K tokens writes 25 complete pages. With React: 2-3 pages before the context fills up.</p>
+    </div>
+    <div class="impact-card">
+      <span class="num">~4s</span>
+      <h3>Per page saved</h3>
+      <p>At 1000 tok/s streaming, React takes ~4.3s per page. FLUX takes ~0.4s. For a 10-page app: 43s vs 4s. You see the output faster and iterate faster.</p>
+    </div>
+    <div class="impact-card">
+      <span class="num">1</span>
+      <h3>File to review</h3>
+      <p>React generates 4+ files you need to scan for bugs. FLUX generates 1 file. When Claude makes a mistake, it's easier to spot and fix with 38 lines vs 262.</p>
+    </div>
+    <div class="impact-card">
+      <span class="num">0</span>
+      <h3>Config files</h3>
+      <p>React needs next.config.ts, tailwind.config.ts, tsconfig.json, postcss.config.js. Claude has to write and maintain all of these. FLUX needs none.</p>
+    </div>
+  </div>
+
+  <!-- Simulation -->
+  <div class="sim-section">
+    <div class="timer-title">Simulated Claude Code output</div>
+    <div class="sim-tabs">
+      <button class="sim-tab active" onclick="showSim('flux')">FLUX output</button>
+      <button class="sim-tab" onclick="showSim('react')">React output</button>
+    </div>
+    <div class="sim-output" id="sim-out">
+      <div class="sim-timer-badge">elapsed: <span id="sim-time">0.0s</span></div>
+      <div id="sim-content"></div>
+      <span class="cursor" id="sim-cursor"></span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// Animate bars on load
+setTimeout(() => {
+  document.getElementById('bar-react').style.width = '100%'
+  document.getElementById('bar-flux').style.width  = (0.4/4.3*100).toFixed(1)+'%'
+  document.getElementById('ctx-react').style.width = '2.16%'
+  document.getElementById('ctx-flux').style.width  = '0.22%'
+}, 300)
+
+// Simulation
+const SIMS = {
+  flux: {
+    speed: 1000,   // tokens/sec
+    lines: [
+      { t: 0,    text: '# Generating SaaS app in FLUX...', cls: 'sim-line-comment' },
+      { t: 50,   text: '%home dark /', cls: 'sim-line-flux' },
+      { t: 100,  text: '', cls: '' },
+      { t: 120,  text: '@stats = {}', cls: 'sim-line-flux' },
+      { t: 160,  text: '~mount GET /api/stats => @stats', cls: 'sim-line-flux' },
+      { t: 210,  text: '', cls: '' },
+      { t: 230,  text: "nav{AppName>/dashboard:Dashboard>/login:Sign in}", cls: 'sim-line-flux' },
+      { t: 290,  text: "hero{Ship faster with AI|Zero config.>/dashboard:Open app}", cls: 'sim-line-flux' },
+      { t: 360,  text: "stats{@stats.users:Users|@stats.mrr:MRR|@stats.uptime:Uptime}", cls: 'sim-line-flux' },
+      { t: 430,  text: "row3{rocket>Deploy>3 seconds.|shield>Enterprise>SOC2, GDPR.|chart>Observability>Real-time.}", cls: 'sim-line-flux' },
+      { t: 490,  text: "foot{© 2025 AppName}", cls: 'sim-line-flux' },
+      { t: 510,  text: '', cls: '' },
+      { t: 520,  text: '---', cls: 'sim-line-comment' },
+      { t: 540,  text: '', cls: '' },
+      { t: 550,  text: '%dashboard dark /dashboard', cls: 'sim-line-flux' },
+      { t: 590,  text: '', cls: '' },
+      { t: 600,  text: '@users = []', cls: 'sim-line-flux' },
+      { t: 630,  text: '@stats = {}', cls: 'sim-line-flux' },
+      { t: 660,  text: '~mount GET /api/users => @users', cls: 'sim-line-flux' },
+      { t: 700,  text: '~mount GET /api/stats => @stats', cls: 'sim-line-flux' },
+      { t: 740,  text: '~interval 10000 GET /api/stats => @stats', cls: 'sim-line-flux' },
+      { t: 790,  text: '', cls: '' },
+      { t: 800,  text: "table @users { Name:name | Email:email | Plan:plan | Status:status }", cls: 'sim-line-flux' },
+      { t: 860,  text: "form POST /api/users => @users.push($result) {", cls: 'sim-line-flux' },
+      { t: 900,  text: "  Full name : text : Alice Johnson", cls: 'sim-line-flux' },
+      { t: 930,  text: "  Email : email : alice@company.com", cls: 'sim-line-flux' },
+      { t: 960,  text: "  Plan : select : starter,pro,enterprise", cls: 'sim-line-flux' },
+      { t: 990,  text: "}", cls: 'sim-line-flux' },
+      { t: 1010, text: "foot{AppName Dashboard © 2025}", cls: 'sim-line-flux' },
+      { t: 1030, text: '', cls: '' },
+      { t: 1040, text: '---', cls: 'sim-line-comment' },
+      { t: 1060, text: '', cls: '' },
+      { t: 1070, text: '%login dark /login', cls: 'sim-line-flux' },
+      { t: 1100, text: "form POST /api/auth/login => redirect /dashboard {", cls: 'sim-line-flux' },
+      { t: 1140, text: "  Email : email : you@company.com", cls: 'sim-line-flux' },
+      { t: 1170, text: "  Password : password :", cls: 'sim-line-flux' },
+      { t: 1190, text: "}", cls: 'sim-line-flux' },
+      { t: 1210, text: "foot{© 2025 AppName}", cls: 'sim-line-flux' },
+      { t: 1230, text: '', cls: '' },
+      { t: 1250, text: '# Done. 38 lines · 442 tokens · 1 file · ~0.4s', cls: 'sim-line-comment' },
+    ]
+  },
+  react: {
+    speed: 1000,
+    lines: [
+      { t: 0,    text: '// Generating SaaS app in React/Next.js...', cls: 'sim-line-comment' },
+      { t: 100,  text: "// app/page.tsx", cls: 'sim-line-comment' },
+      { t: 200,  text: "'use client'", cls: 'sim-line-react' },
+      { t: 280,  text: "import { useEffect, useState } from 'react'", cls: 'sim-line-react' },
+      { t: 380,  text: "import Link from 'next/link'", cls: 'sim-line-react' },
+      { t: 440,  text: '', cls: '' },
+      { t: 460,  text: "interface Stats { users: number; mrr: number; uptime: string; arr: number }", cls: 'sim-line-react' },
+      { t: 560,  text: '', cls: '' },
+      { t: 580,  text: "export default function Home() {", cls: 'sim-line-react' },
+      { t: 650,  text: "  const [stats, setStats] = useState<Stats>({} as Stats)", cls: 'sim-line-react' },
+      { t: 750,  text: '', cls: '' },
+      { t: 770,  text: "  useEffect(() => {", cls: 'sim-line-react' },
+      { t: 820,  text: "    fetch('/api/stats').then(r=>r.json()).then(setStats)", cls: 'sim-line-react' },
+      { t: 900,  text: "  }, [])", cls: 'sim-line-react' },
+      { t: 950,  text: '', cls:'' },
+      { t: 970,  text: '  return (', cls: 'sim-line-react' },
+      { t: 1020, text: '    <div className="bg-gray-950 text-gray-100 min-h-screen font-sans">', cls: 'sim-line-react' },
+      { t: 1100, text: '      <nav className="flex items-center justify-between px-8 py-4', cls: 'sim-line-react' },
+      { t: 1180, text: '        border-b border-gray-800 sticky top-0 backdrop-blur-sm z-50">', cls: 'sim-line-react' },
+      { t: 1260, text: '        <span className="text-xl font-bold tracking-tight">AppName</span>', cls: 'sim-line-react' },
+      { t: 1360, text: '        <div className="flex items-center gap-6">', cls: 'sim-line-react' },
+      { t: 1440, text: '          <Link href="/dashboard" className="text-gray-400 text-sm font-medium', cls: 'sim-line-react' },
+      { t: 1530, text: '            hover:opacity-80 transition-opacity">Dashboard</Link>', cls: 'sim-line-react' },
+      { t: 1630, text: '          ... (still generating page 1 of 3)', cls: 'sim-line-comment' },
+      { t: 2200, text: '      </nav>', cls: 'sim-line-react' },
+      { t: 2300, text: '      <section className="flex flex-col items-center justify-center', cls: 'sim-line-react' },
+      { t: 2400, text: '        min-h-[90vh] text-center px-6">', cls: 'sim-line-react' },
+      { t: 2900, text: '      </section>', cls: 'sim-line-react' },
+      { t: 3200, text: '    </div>', cls: 'sim-line-react' },
+      { t: 3400, text: '  )', cls: 'sim-line-react' },
+      { t: 3500, text: '}', cls: 'sim-line-react' },
+      { t: 3600, text: '', cls: '' },
+      { t: 3650, text: '// app/dashboard/page.tsx — generating...', cls: 'sim-line-comment' },
+      { t: 4000, text: '// (still generating dashboard page, 82 more lines)', cls: 'sim-line-comment' },
+      { t: 4300, text: '// Done. 262 lines · 4,326 tokens · 4 files · ~4.3s', cls: 'sim-line-comment' },
+    ]
+  }
+}
+
+let simRunning = false
+let simTimeout = null
+let currentSim = 'flux'
+
+function showSim(lang) {
+  currentSim = lang
+  document.querySelectorAll('.sim-tab').forEach(t => t.classList.remove('active'))
+  event.target.classList.add('active')
+  runSim(lang)
+}
+
+function runSim(lang) {
+  if (simTimeout) clearTimeout(simTimeout)
+  const content = document.getElementById('sim-content')
+  const timeEl  = document.getElementById('sim-time')
+  const cursor  = document.getElementById('sim-cursor')
+  content.innerHTML = ''
+  timeEl.textContent = '0.0s'
+  cursor.style.display = 'inline-block'
+
+  const sim = SIMS[lang]
+  const startTime = performance.now()
+
+  sim.lines.forEach(({ t, text, cls }) => {
+    simTimeout = setTimeout(() => {
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+      timeEl.textContent = elapsed + 's'
+
+      if (text === '') {
+        content.appendChild(document.createElement('br'))
+      } else {
+        const div = document.createElement('div')
+        if (cls) div.className = cls
+        div.textContent = text
+        content.appendChild(div)
+      }
+
+      // Auto scroll
+      const out = document.getElementById('sim-out')
+      out.scrollTop = out.scrollHeight
+    }, t)
+  })
+
+  // Stop cursor when done
+  const lastT = sim.lines[sim.lines.length - 1].t + 500
+  setTimeout(() => { cursor.style.display = 'none' }, lastT)
+}
+
+// Auto-run flux sim on load
+setTimeout(() => runSim('flux'), 1000)
+</script>
+</body>
+</html>

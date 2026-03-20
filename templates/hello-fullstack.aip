@@ -1,0 +1,38 @@
+# Hello World (Full-stack) — aiplang
+# Demonstrates: DB, API, frontend, state
+# Run: npx aiplang start hello-fullstack.aip
+
+~db sqlite ./hello.db
+
+model Message {
+  id   : uuid : pk auto
+  text : text : required
+}
+
+api GET /api/messages {
+  return Message.all(order=created_at desc)
+}
+
+api POST /api/messages {
+  ~validate text required
+  insert Message($body)
+  return $inserted 201
+}
+
+api GET /api/stats {
+  return Message.count()
+}
+
+%hello dark /
+~theme accent=#6366f1 radius=1rem font=Inter
+@messages = []
+@count = 0
+~mount GET /api/messages => @messages
+~mount GET /api/stats => @count
+~interval 5000 GET /api/messages => @messages
+nav{aiplang Hello World}
+hero{Hello, World!|Full-stack in one file.} animate:blur-in
+stats{@count:Messages sent}
+table @messages { Message:text | empty: No messages yet. Send one below! }
+form POST /api/messages => @messages.push($result) { Message:text:Hello, aiplang! }
+foot{© 2025 aiplang}

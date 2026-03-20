@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.9.1'
+const VERSION     = '2.9.2'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -181,6 +181,12 @@ stats{@stats:Total users}
 sect{Users}
 table @users { Name:name | Email:email | Plan:plan | edit PUT /api/users/{id} | delete /api/users/{id} | empty: No users yet. }
 foot{{{name}} Dashboard}`,
+
+  hello: `# {{name}}
+%home dark /
+nav{{{name}}}
+hero{Hello, World!|Built with aiplang.} animate:blur-in
+foot{© {{year}} {{name}}}`,
 
   landing: `# {{name}}
 %home dark /

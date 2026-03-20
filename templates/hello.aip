@@ -1,0 +1,8 @@
+# Hello World — aiplang
+# The simplest possible .aip file
+# Run: npx aiplang serve (static) or npx aiplang start hello.aip (full-stack)
+
+%hello dark /
+nav{aiplang}
+hero{Hello, World!|One file. Zero config. Just run.} animate:blur-in
+foot{© 2025 aiplang}

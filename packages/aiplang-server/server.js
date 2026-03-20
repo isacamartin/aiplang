@@ -139,9 +139,41 @@ if (!process.env.JWT_SECRET) {
   }
   console.warn('[aiplang] WARNING: JWT_SECRET not set. Using insecure dev default. Set JWT_SECRET in .env')
 }
-let JWT_EXPIRE = '7d'
-const generateJWT = (user) => jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: JWT_EXPIRE })
-const verifyJWT   = (token) => { try { return jwt.verify(token, JWT_SECRET) } catch { return null } }
+let JWT_EXPIRE         = '7d'
+let JWT_REFRESH_EXPIRE = '30d'
+let JWT_REFRESH_SECRET = null
+
+function getRefreshSecret() {
+  return JWT_REFRESH_SECRET || (JWT_SECRET + ':refresh')
+}
+
+const generateJWT = (user) => jwt.sign(
+  { id: user.id, email: user.email, role: user.role || 'user', type: 'access' },
+  JWT_SECRET,
+  { expiresIn: JWT_EXPIRE }
+)
+
+const generateRefreshToken = (user) => jwt.sign(
+  { id: user.id, type: 'refresh' },
+  getRefreshSecret(),
+  { expiresIn: JWT_REFRESH_EXPIRE }
+)
+
+const verifyJWT = (token) => {
+  try {
+    const p = jwt.verify(token, JWT_SECRET)
+    if (p.type === 'refresh') return null
+    return p
+  } catch { return null }
+}
+
+const verifyRefreshToken = (token) => {
+  try {
+    const p = jwt.verify(token, getRefreshSecret())
+    if (p.type !== 'refresh') return null
+    return p
+  } catch { return null }
+}
 
 // ── WebSocket Realtime Server ─────────────────────────────────────
 let _wsServer = null
@@ -279,6 +311,60 @@ const MODEL_DEFS = {}
 function toTable(name) { return name.toLowerCase().replace(/([A-Z])/g,'_$1').replace(/^_/,'') + 's' }
 function toCol(field) { return field.replace(/([A-Z])/g,'_$1').toLowerCase() }
 
+// ── Runtime schema validation + coercion ─────────────────────────
+function validateAndCoerce(data, schema) {
+  if (!schema) return { ok: true, data }
+  const out = { ...data }
+  const errors = []
+
+  for (const [col, def] of Object.entries(schema)) {
+    const val = out[col]
+
+    // Skip pk/auto/hashed fields
+    if (col === 'id' || def.hashed) continue
+
+    // Coerce type
+    if (val !== undefined && val !== null) {
+      if (def.type === 'int') {
+        const n = parseInt(val)
+        if (isNaN(n)) errors.push(`${col}: expected integer, got "${val}"`)
+        else out[col] = n
+      } else if (def.type === 'float') {
+        const n = parseFloat(val)
+        if (isNaN(n)) errors.push(`${col}: expected number, got "${val}"`)
+        else out[col] = n
+      } else if (def.type === 'bool') {
+        if (typeof val === 'string') out[col] = val === 'true' || val === '1'
+        else out[col] = Boolean(val)
+      } else if (def.type === 'enum' && def.enumVals.length > 0) {
+        if (!def.enumVals.includes(String(val))) {
+          errors.push(`${col}: "${val}" is not valid. Must be one of: ${def.enumVals.join(', ')}`)
+        }
+      } else if (def.type === 'json' && typeof val === 'string') {
+        try { out[col] = JSON.parse(val) } catch { /* keep as string */ }
+      } else if (Array.isArray(val)) {
+        // Arrays are not allowed for non-json fields
+        if (def.type !== 'json') {
+          errors.push(`${col}: expected ${def.type}, got array`)
+        }
+      } else if (typeof val === 'object' && val !== null && def.type !== 'json') {
+        errors.push(`${col}: expected ${def.type}, got object`)
+      }
+    }
+
+    // Apply default
+    if ((val === undefined || val === null || val === '') && def.default !== null && def.default !== undefined) {
+      if (def.type === 'bool') out[col] = def.default === 'true' || def.default === true
+      else if (def.type === 'int') out[col] = parseInt(def.default) || 0
+      else if (def.type === 'float') out[col] = parseFloat(def.default) || 0
+      else out[col] = def.default
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors }
+  return { ok: true, data: out }
+}
+
 class Model {
   constructor(name, def = null) {
     this.modelName  = name
@@ -286,6 +372,7 @@ class Model {
     this.def        = def || MODEL_DEFS[name] || {}
     this.softDelete = this.def.softDelete || false
     this.timestamps = this.def.timestamps !== false
+    this.schema     = this.def.schema || null
   }
 
   // ── Core queries ────────────────────────────────────────────────
@@ -338,7 +425,15 @@ class Model {
   }
 
   create(data) {
-    const row = { ...data }
+    // Runtime schema validation + coercion
+    const validated = validateAndCoerce(data, this.schema)
+    if (!validated.ok) {
+      const err = new Error(`Schema validation failed: ${validated.errors.join('; ')}`)
+      err.statusCode = 422
+      err.errors = validated.errors
+      throw err
+    }
+    const row = { ...validated.data }
     if (!row.id) row.id = uuid()
     if (this.timestamps) {
       if (!row.created_at) row.created_at = now()
@@ -351,7 +446,15 @@ class Model {
   }
 
   update(id, data) {
-    const row = { ...data }
+    // Validate + coerce update payload
+    const validated = validateAndCoerce(data, this.schema)
+    if (!validated.ok) {
+      const err = new Error(`Schema validation failed: ${validated.errors.join('; ')}`)
+      err.statusCode = 422
+      err.errors = validated.errors
+      throw err
+    }
+    const row = { ...validated.data }
     delete row.id; delete row.created_at; delete row.password
     if (this.timestamps) row.updated_at = now()
     const sets = Object.keys(row).map(k => `${k} = ?`).join(', ')
@@ -449,7 +552,19 @@ function migrateModels(models) {
     // Always index created_at for pagination performance
     try { dbRun(`CREATE INDEX IF NOT EXISTS idx_${table}_created_at ON ${table}(created_at)`) } catch {}
     console.log(`[aiplang] ✓  ${table} (${cols.length} cols${model.softDelete ? ', soft-delete' : ''})`)
-    MODEL_DEFS[model.name] = { softDelete: model.softDelete, timestamps: true }
+    // Store full schema for runtime validation
+    const schema = {}
+    for (const f of model.fields) {
+      schema[toCol(f.name)] = {
+        type: f.type,
+        required: f.modifiers.includes('required'),
+        unique: f.modifiers.includes('unique'),
+        hashed: f.modifiers.includes('hashed'),
+        enumVals: f.enumVals || [],
+        default: f.default,
+      }
+    }
+    MODEL_DEFS[model.name] = { softDelete: model.softDelete, timestamps: true, schema }
   }
 }
 
@@ -502,11 +617,25 @@ function parseApp(src) {
 
     if (line.startsWith('api ')) {
       if (inAPI && curAPI) app.apis.push(curAPI)
-      const pts = line.slice(4).replace('{','').trim().split(/\s+/)
+      const braceIdx = line.indexOf('{')
+      const closeBraceIdx = line.lastIndexOf('}')
+      const pts = line.slice(4, braceIdx).trim().split(/\s+/)
       curAPI = { method:pts[0], path:pts[1], guards:[], validate:[], query:[], body:[], return:null }
+      // Inline api: "api GET /path { ops }" — entire api on one line
+      if (braceIdx !== -1 && closeBraceIdx > braceIdx) {
+        const inlineBody = line.slice(braceIdx+1, closeBraceIdx).trim()
+        if (inlineBody) {
+          inlineBody.split('\n').forEach(op => { op = op.trim(); if (op) parseAPILine(op, curAPI) })
+        }
+        app.apis.push(curAPI); curAPI=null; inAPI=false; i++; continue
+      }
       inAPI=true; i++; continue
     }
-    if (inAPI && line === '}') { if (curAPI) app.apis.push(curAPI); curAPI=null; inAPI=false; i++; continue }
+    if (inAPI && (line === '}' || (line.endsWith('}') && !line.includes('{')))) {
+      const opLine = line !== '}' ? line.slice(0, line.lastIndexOf('}')).trim() : null
+      if (opLine && curAPI) parseAPILine(opLine, curAPI)
+      if (curAPI) app.apis.push(curAPI); curAPI=null; inAPI=false; i++; continue
+    }
     if (inAPI && curAPI) { parseAPILine(line, curAPI); i++; continue }
     i++
   }
@@ -518,7 +647,7 @@ function parseApp(src) {
 
 function parseEnvLine(s) { const p=s.split(/\s+/); const ev={name:'',required:false,default:null}; for(const x of p){if(x==='required')ev.required=true;else if(x.includes('=')){const[k,v]=x.split('=');ev.name=k;ev.default=v}else ev.name=x}; return ev }
 function parseDBLine(s) { const p=s.split(/\s+/); return{driver:p[0]||'sqlite',dsn:p[1]||'./app.db'} }
-function parseAuthLine(s) { const p=s.split(/\s+/); const a={provider:'jwt',secret:p[1]||'$JWT_SECRET',expire:'7d'}; for(const x of p){if(x.startsWith('expire='))a.expire=x.slice(7);if(x==='google')a.oauth=['google'];if(x==='github')a.oauth=[...(a.oauth||[]),'google']}; return a }
+function parseAuthLine(s) { const p=s.split(/\s+/); const a={provider:'jwt',secret:p[1]||'$JWT_SECRET',expire:'7d',refresh:'30d'}; for(const x of p){if(x.startsWith('expire='))a.expire=x.slice(7);if(x.startsWith('refresh='))a.refresh=x.slice(8);if(x==='google')a.oauth=['google'];if(x==='github')a.oauth=[...(a.oauth||[]),'google']}; return a }
 function parseMailLine(s) { const parts=s.split(/\s+/); const m={driver:parts[0]||'smtp'}; for(const x of parts.slice(1)){const[k,v]=x.split('='); m[k]=v}; return m }
 function parseStripeLine(s) {
   const parts = s.split(/\s+/)
@@ -745,14 +874,33 @@ async function execOp(line, ctx, server) {
   // insert Model($body)
   if (line.startsWith('insert ')) {
     const modelName=line.match(/insert\s+(\w+)/)?.[1]; const m=server.models[modelName]
-    if (m) { ctx.vars['inserted']=m.create({...ctx.body}); broadcast(modelName.toLowerCase(), {action:'created',data:ctx.vars['inserted']}); return ctx.vars['inserted'] }
+    if (m) {
+      try {
+        ctx.vars['inserted'] = m.create({...ctx.body})
+        broadcast(modelName.toLowerCase(), {action:'created',data:ctx.vars['inserted']})
+        return ctx.vars['inserted']
+      } catch(e) {
+        if (e.statusCode) { ctx.res.error(e.statusCode, e.message); return '__DONE__' }
+        throw e
+      }
+    }
     return null
   }
 
   // update Model($id, $body)
   if (line.startsWith('update ')) {
     const modelName=line.match(/update\s+(\w+)/)?.[1]; const m=server.models[modelName]
-    if (m) { const id=ctx.params.id||ctx.vars['id']; ctx.vars['updated']=m.update(id,{...ctx.body}); broadcast(modelName.toLowerCase(), {action:'updated',data:ctx.vars['updated']}); return ctx.vars['updated'] }
+    if (m) {
+      try {
+        const id=ctx.params.id||ctx.vars['id']
+        ctx.vars['updated'] = m.update(id,{...ctx.body})
+        broadcast(modelName.toLowerCase(), {action:'updated',data:ctx.vars['updated']})
+        return ctx.vars['updated']
+      } catch(e) {
+        if (e.statusCode) { ctx.res.error(e.statusCode, e.message); return '__DONE__' }
+        throw e
+      }
+    }
     return null
   }
 
@@ -785,7 +933,7 @@ async function execOp(line, ctx, server) {
 
 function evalExpr(expr, ctx, server) {
   expr=expr.trim()
-  if (expr.startsWith('jwt('))       { const vn=expr.match(/jwt\(\$([^)]+)\)/)?.[1]; const u=vn?ctx.vars[vn]:ctx.body; return{token:generateJWT(u),user:sanitize(u)} }
+  if (expr.startsWith('jwt('))       { const vn=expr.match(/jwt\(\$([^)]+)\)/)?.[1]; const u=vn?ctx.vars[vn]:ctx.body; return{token:generateJWT(u),refresh_token:generateRefreshToken(u),expires_in:JWT_EXPIRE,user:sanitize(u)} }
   if (expr==='$auth.user'||expr==='$auth') return ctx.user
   if (expr.includes('.all('))        { return evalModelOp('all', expr, ctx, server) }
   if (expr.includes('.find('))       { return evalModelOp('find', expr, ctx, server) }
@@ -1537,6 +1685,8 @@ async function startServer(aipFile, port = 3000) {
   // Auth setup
   if (app.auth) {
     JWT_SECRET = resolveEnv(app.auth.secret) || JWT_SECRET
+    if (app.auth.expire) JWT_EXPIRE = app.auth.expire
+    if (app.auth.refresh) JWT_REFRESH_EXPIRE = app.auth.refresh
     JWT_EXPIRE = app.auth.expire || '7d'
   }
 
@@ -1564,6 +1714,27 @@ async function startServer(aipFile, port = 3000) {
 
   // Events
   for (const ev of app.events) on(ev.event, (data) => console.log(`[aiplang:event] ${ev.event}:`, ev.action))
+
+  // Auto refresh token endpoint — POST /api/auth/refresh
+  if (app.auth) {
+    srv.addRoute('POST', '/api/auth/refresh', async (req, res) => {
+      const refreshToken = req.body?.refresh_token ||
+        (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].slice(7) : null)
+      if (!refreshToken) { res.error(401, 'refresh_token required'); return }
+      const payload = verifyRefreshToken(refreshToken)
+      if (!payload) { res.error(401, 'Invalid or expired refresh token'); return }
+      // Find the user
+      const userModel = srv.models['User'] || Object.values(srv.models)[0]
+      if (!userModel) { res.error(500, 'No user model found'); return }
+      const user = userModel.find(payload.id)
+      if (!user) { res.error(401, 'User not found'); return }
+      // Issue new tokens
+      const newToken = generateJWT(user)
+      const newRefresh = generateRefreshToken(user)
+      res.json(200, { token: newToken, refresh_token: newRefresh, expires_in: JWT_EXPIRE })
+    })
+    console.log('[aiplang] Route:  POST /api/auth/refresh (auto)')
+  }
 
   // Auth rate limiting (automatic — 20 req/min per IP on /api/auth/*)
   const _authAttempts = {}
@@ -1618,7 +1789,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.9.1',
+    status:'ok', version:'2.9.3',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

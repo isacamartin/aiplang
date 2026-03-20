@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.7.2'
+const VERSION     = '2.7.3'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -615,13 +615,15 @@ function parseBlock(line) {
   }
 
   // ── table ───────────────────────────────────────────────────
-  if(line.startsWith('table ')) {
+  if(line.startsWith('table ') || line.startsWith('table{')) {
     const idx=line.indexOf('{');if(idx===-1) return null
-    const binding=line.slice(6,idx).trim()
+    const start=line.startsWith('table{')?6:6
+    const binding=line.slice(start,idx).trim().replace(/^@/,'@')
     const content=line.slice(idx+1,line.lastIndexOf('}')).trim()
     const em=content.match(/edit\s+(PUT|PATCH)\s+(\S+)/), dm=content.match(/delete\s+(?:DELETE\s+)?(\S+)/)
     const clean=content.replace(/edit\s+(PUT|PATCH)\s+\S+/g,'').replace(/delete\s+(?:DELETE\s+)?\S+/g,'')
-    return{kind:'table',binding,cols:parseCols(clean),empty:parseEmpty(clean),editPath:em?.[2]||null,editMethod:em?.[1]||'PUT',deletePath:dm?.[1]||null,deleteKey:'id',extraClass,animate}
+    const cols=parseCols(clean)
+    return{kind:'table',binding,cols:Array.isArray(cols)?cols:[],empty:parseEmpty(clean),editPath:em?.[2]||null,editMethod:em?.[1]||'PUT',deletePath:dm?.[1]||null,deleteKey:'id',extraClass,animate}
   }
 
   // ── form ────────────────────────────────────────────────────
@@ -727,7 +729,7 @@ function applyMods(html, b) {
 
 function renderPage(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','list','form','if','btn','select','faq'].includes(b.kind))
-  const body=page.blocks.map(b=>applyMods(renderBlock(b,page),b)).join('')
+  const body=page.blocks.map(b=>{try{return applyMods(renderBlock(b,page),b)}catch(e){console.error('[aiplang] Block render error:',b.kind,e.message);return ''}}).join('')
   const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries}):''
   const hydrate=needsJS?`\n<script>window.__AIPLANG_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
   const customVars=page.customTheme?genCustomThemeVars(page.customTheme):''
@@ -800,7 +802,7 @@ function rStats(b) {
 }
 
 function rRow(b) {
-  const cards=b.items.map(item=>{
+  const cards=(b.items||[]).map(item=>{
     const inner=item.map((f,fi)=>{
       if(f.isImg) return`<img src="${esc(f.src)}" class="fx-card-img" alt="" loading="lazy">`
       if(f.isLink) return`<a href="${esc(f.path)}" class="fx-card-link">${esc(f.label)} →</a>`
@@ -825,7 +827,7 @@ function rSect(b) {
 
 function rFoot(b) {
   let inner=''
-  for(const item of b.items) for(const f of item){
+  for(const item of (b.items||[])) for(const f of item){
     if(f.isLink) inner+=`<a href="${esc(f.path)}" class="fx-footer-link">${esc(f.label)}</a>`
     else inner+=`<p class="fx-footer-text">${esc(f.text)}</p>`
   }
@@ -833,13 +835,14 @@ function rFoot(b) {
 }
 
 function rTable(b) {
-  const ths=b.cols.map(c=>`<th class="fx-th">${esc(c.label)}</th>`).join('')
-  const keys=JSON.stringify(b.cols.map(c=>c.key))
-  const cm=JSON.stringify(b.cols.map(c=>({label:c.label,key:c.key})))
+  const cols=Array.isArray(b.cols)?b.cols:[]
+  const ths=cols.map(c=>`<th class="fx-th">${esc(c.label)}</th>`).join('')
+  const keys=JSON.stringify(cols.map(c=>c.key))
+  const cm=JSON.stringify(cols.map(c=>({label:c.label,key:c.key})))
   const ea=b.editPath?` data-fx-edit="${esc(b.editPath)}" data-fx-edit-method="${esc(b.editMethod)}"`:''
   const da=b.deletePath?` data-fx-delete="${esc(b.deletePath)}"`:''
   const at=(b.editPath||b.deletePath)?'<th class="fx-th fx-th-actions">Actions</th>':''
-  const span=b.cols.length+((b.editPath||b.deletePath)?1:0)
+  const span=cols.length+((b.editPath||b.deletePath)?1:0)
   return `<div class="fx-table-wrap"><table class="fx-table" data-fx-table="${esc(b.binding)}" data-fx-cols='${keys}' data-fx-col-map='${cm}'${ea}${da}><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${span}" class="fx-td-empty">${esc(b.empty)}</td></tr></tbody></table></div>\n`
 }
 
@@ -862,12 +865,12 @@ function rBtn(b) {
 }
 
 function rSelectBlock(b) {
-  const opts=b.options.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('')
+  const opts=(b.options||[]).map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('')
   return `<div class="fx-select-wrap"><select class="fx-input fx-select-block" data-fx-model="${esc(b.binding)}">${opts}</select></div>\n`
 }
 
 function rPricing(b) {
-  const cards=b.plans.map((p,i)=>{
+  const cards=(b.plans||[]).map((p,i)=>{
     let lh='#',ll='Get started'
     if(p.linkRaw){const m=p.linkRaw.match(/\/([^:]+):(.+)/);if(m){lh='/'+m[1];ll=m[2]}}
     const f=i===1?' fx-pricing-featured':''
@@ -878,7 +881,7 @@ function rPricing(b) {
 }
 
 function rFaq(b) {
-  const items=b.items.map(i=>`<div class="fx-faq-item" onclick="this.classList.toggle('open')"><div class="fx-faq-q">${esc(i.q)}<span class="fx-faq-arrow">▸</span></div><div class="fx-faq-a">${esc(i.a)}</div></div>`).join('')
+  const items=(b.items||[]).map(i=>`<div class="fx-faq-item" onclick="this.classList.toggle('open')"><div class="fx-faq-q">${esc(i.q)}<span class="fx-faq-arrow">▸</span></div><div class="fx-faq-a">${esc(i.a)}</div></div>`).join('')
   return `<section class="fx-sect"><div class="fx-faq">${items}</div></section>\n`
 }
 
@@ -888,7 +891,7 @@ function rTestimonial(b) {
 }
 
 function rGallery(b) {
-  const imgs=b.imgs.map(src=>`<div class="fx-gallery-item"><img src="${esc(src)}" alt="" loading="lazy"></div>`).join('')
+  const imgs=(b.imgs||[]).map(src=>`<div class="fx-gallery-item"><img src="${esc(src)}" alt="" loading="lazy"></div>`).join('')
   return `<div class="fx-gallery">${imgs}</div>\n`
 }
 

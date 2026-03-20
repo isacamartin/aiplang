@@ -1,7 +1,4 @@
-/**
- * aiplang-hydrate.js — aiplang Hydration Runtime v2.1
- * Handles: state, queries, table, list, form, if, edit, delete, btn, select
- */
+
 
 (function () {
 'use strict'
@@ -31,7 +28,28 @@ function watch(key, cb) {
   return () => { _watchers[key] = _watchers[key].filter(f => f !== cb) }
 }
 
+// Batched notify — queues all pending updates and flushes in rAF (like React's batching)
+const _pending = new Set()
+let _batchScheduled = false
+
+function flushBatch() {
+  _batchScheduled = false
+  for (const key of _pending) {
+    ;(_watchers[key] || []).forEach(cb => cb(_state[key]))
+  }
+  _pending.clear()
+}
+
 function notify(key) {
+  _pending.add(key)
+  if (!_batchScheduled) {
+    _batchScheduled = true
+    requestAnimationFrame(flushBatch)
+  }
+}
+
+// Force immediate flush (for critical updates like form submit)
+function notifySync(key) {
   ;(_watchers[key] || []).forEach(cb => cb(_state[key]))
 }
 
@@ -251,9 +269,35 @@ function hydrateTables() {
         return
       }
 
+      // Virtual rendering: only render visible rows for large datasets
+      const VIRTUAL_THRESHOLD = 100
+      const ROW_HEIGHT = 44 // px
+      const useVirtual = rows.length >= VIRTUAL_THRESHOLD
+
+      if (useVirtual) {
+        const wrapDiv = tbody.closest('.fx-table-wrap') || tbody.parentElement
+        const visible = Math.ceil((wrapDiv.clientHeight || 400) / ROW_HEIGHT) + 10
+        const scrollTop = wrapDiv.scrollTop || 0
+        const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 5)
+        const endIdx = Math.min(rows.length - 1, startIdx + visible)
+
+        // Spacer before
+        if (startIdx > 0) {
+          const spacerTr = document.createElement('tr')
+          const spacerTd = document.createElement('td')
+          spacerTd.colSpan = cols.length + (editPath || delPath ? 1 : 0)
+          spacerTd.style.height = (startIdx * ROW_HEIGHT) + 'px'
+          spacerTd.style.padding = '0'
+          spacerTr.appendChild(spacerTd)
+          tbody.appendChild(spacerTr)
+        }
+        rows = rows.slice(startIdx, endIdx + 1)
+      }
+
       rows.forEach((row, idx) => {
         const tr = document.createElement('tr')
         tr.className = 'fx-tr'
+        if (useVirtual) tr.style.height = ROW_HEIGHT + 'px'
 
         // Data cells
         for (const col of cols) {
@@ -452,6 +496,86 @@ function hydrateIfs() {
   })
 }
 
+// ── Advanced Animations (scroll-triggered + stagger) ─────────────
+function initAnimations() {
+  // Extended animation presets — beyond what React ships by default
+  const style = document.createElement('style')
+  style.textContent = `
+    @keyframes fx-blur-in   { from{opacity:0;filter:blur(8px);transform:translateY(8px)} to{opacity:1;filter:blur(0);transform:none} }
+    @keyframes fx-fade-up   { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:none} }
+    @keyframes fx-fade-in   { from{opacity:0} to{opacity:1} }
+    @keyframes fx-slide-up  { from{opacity:0;transform:translateY(40px)} to{opacity:1;transform:none} }
+    @keyframes fx-slide-left{ from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:none} }
+    @keyframes fx-scale-in  { from{opacity:0;transform:scale(.92)} to{opacity:1;transform:scale(1)} }
+    @keyframes fx-bounce    { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+    @keyframes fx-shake     { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
+    @keyframes fx-pulse-ring{ 0%{box-shadow:0 0 0 0 rgba(99,102,241,.4)} 70%{box-shadow:0 0 0 12px transparent} 100%{box-shadow:0 0 0 0 transparent} }
+    @keyframes fx-count     { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+    [class*="fx-anim-"] { opacity: 0 }
+    [class*="fx-anim-"].fx-visible { animation-fill-mode: both; animation-timing-function: cubic-bezier(.4,0,.2,1) }
+    .fx-visible.fx-anim-blur-in   { animation: fx-blur-in   .7s both }
+    .fx-visible.fx-anim-fade-up   { animation: fx-fade-up   .6s both }
+    .fx-visible.fx-anim-fade-in   { animation: fx-fade-in   .5s both }
+    .fx-visible.fx-anim-slide-up  { animation: fx-slide-up  .65s both }
+    .fx-visible.fx-anim-slide-left{ animation: fx-slide-left .6s both }
+    .fx-visible.fx-anim-scale-in  { animation: fx-scale-in  .5s both }
+    .fx-visible.fx-anim-stagger > * { animation: fx-fade-up .5s both }
+    .fx-visible.fx-anim-stagger > *:nth-child(1) { animation-delay: 0s }
+    .fx-visible.fx-anim-stagger > *:nth-child(2) { animation-delay: .1s }
+    .fx-visible.fx-anim-stagger > *:nth-child(3) { animation-delay: .2s }
+    .fx-visible.fx-anim-stagger > *:nth-child(4) { animation-delay: .3s }
+    .fx-visible.fx-anim-stagger > *:nth-child(5) { animation-delay: .4s }
+    .fx-visible.fx-anim-stagger > *:nth-child(6) { animation-delay: .5s }
+    .fx-anim-bounce { animation: fx-bounce 1.5s ease-in-out infinite !important; opacity: 1 !important }
+    .fx-anim-pulse  { animation: fx-pulse-ring 2s ease infinite !important; opacity: 1 !important }
+  `
+  document.head.appendChild(style)
+
+  // Intersection Observer — trigger when element scrolls into view (like Framer whileInView)
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('fx-visible')
+        observer.unobserve(entry.target)
+      }
+    })
+  }, { threshold: 0.12, rootMargin: '0px 0px -30px 0px' })
+
+  document.querySelectorAll('[class*="fx-anim-"]').forEach(el => {
+    // bounce and pulse run immediately
+    if (el.classList.contains('fx-anim-bounce') || el.classList.contains('fx-anim-pulse')) {
+      el.classList.add('fx-visible'); return
+    }
+    observer.observe(el)
+  })
+
+  // Counter animation — numbers count up on scroll-in
+  document.querySelectorAll('.fx-stat-val').forEach(el => {
+    const target = parseFloat(el.textContent)
+    if (isNaN(target) || target === 0) return
+    const isFloat = el.textContent.includes('.')
+    let hasAnimated = false
+    const obs = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting || hasAnimated) return
+      hasAnimated = true
+      obs.unobserve(el)
+      const dur = Math.min(1200, Math.max(600, target * 2))
+      const start = Date.now()
+      const tick = () => {
+        const elapsed = Date.now() - start
+        const progress = Math.min(elapsed / dur, 1)
+        const eased = 1 - Math.pow(1 - progress, 3)
+        const current = target * eased
+        el.textContent = isFloat ? current.toFixed(1) : Math.round(current).toLocaleString()
+        if (progress < 1) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    }, { threshold: 0.5 })
+    obs.observe(el)
+  })
+}
+
 // ── Inject action column CSS ──────────────────────────────────────
 function injectActionCSS() {
   const style = document.createElement('style')
@@ -471,17 +595,147 @@ function injectActionCSS() {
   document.head.appendChild(style)
 }
 
+// ── SSR Data Injection — pre-populate state from server data ────────
+// Server can inject window.__SSR_DATA__ = {users: [...], stats: {...}}
+// to avoid loading flash (like Next.js getServerSideProps)
+function loadSSRData() {
+  const ssr = window.__SSR_DATA__
+  if (!ssr) return
+  for (const [key, value] of Object.entries(ssr)) {
+    _state[key] = value
+  }
+}
+
+// ── Optimistic UI ─────────────────────────────────────────────────
+// form data-fx-optimistic="true": updates state instantly, rolls back on error
+function hydrateOptimistic() {
+  document.querySelectorAll('[data-fx-optimistic]').forEach(form => {
+    const action = form.getAttribute('data-fx-action') || ''
+    const pm = action.match(/^@([a-zA-Z_]+)\.push\(\$result\)$/)
+    if (!pm) return
+    const key = pm[1]
+
+    form.addEventListener('submit', (e) => {
+      // Inject a temp item optimistically before submit fires
+      const body = {}
+      form.querySelectorAll('input,select,textarea').forEach(inp => {
+        if (inp.name) body[inp.name] = inp.value
+      })
+      const tempId = '__temp_' + Date.now()
+      const optimisticItem = { ...body, id: tempId, _optimistic: true }
+      const current = [...(get(key) || [])]
+      set(key, [...current, optimisticItem])
+
+      // After actual submit (handled by hydrateForms), remove temp if error
+      const origAction = form.getAttribute('data-fx-action')
+      form.setAttribute('data-fx-action-orig', origAction)
+      form.setAttribute('data-fx-action', `@${key}._rollback_${tempId}`)
+
+      // Restore action after tick
+      setTimeout(() => {
+        form.setAttribute('data-fx-action', origAction)
+        // Clean up optimistic item if real item arrived
+        setTimeout(() => {
+          const arr = get(key) || []
+          const hasReal = arr.some(i => !i._optimistic)
+          if (hasReal) set(key, arr.filter(i => !i._optimistic || i.id !== tempId))
+        }, 500)
+      }, 50)
+    }, true) // capture phase — before hydrateForms submit handler
+  })
+}
+
+// ── Error recovery — fallback + retry ────────────────────────────
+function hydrateTableErrors() {
+  document.querySelectorAll('[data-fx-fallback]').forEach(tbl => {
+    const fallback = tbl.getAttribute('data-fx-fallback')
+    const retryPath = tbl.getAttribute('data-fx-retry')
+    const binding = tbl.getAttribute('data-fx-table')
+    if (!fallback) return
+
+    const tbody = tbl.querySelector('tbody')
+    const originalEmpty = tbl.getAttribute('data-fx-empty') || 'No data.'
+
+    // Override runQuery to detect errors for this table's binding
+    const key = binding?.replace(/^@/, '') || ''
+    if (key) {
+      const cleanup = watch(key, (val) => {
+        if (val === '__error__') {
+          if (tbody) {
+            const cols = JSON.parse(tbl.getAttribute('data-fx-cols') || '[]')
+            tbody.innerHTML = `<tr><td colspan="${cols.length + 2}" class="fx-td-empty" style="color:#f87171">
+              ${fallback}
+              ${retryPath ? `<button onclick="window.__aiplang_retry('${binding}','${retryPath}')" style="margin-left:.75rem;padding:.3rem .75rem;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#f87171;border-radius:.375rem;cursor:pointer;font-size:.75rem">↻ Retry</button>` : ''}
+            </td></tr>`
+          }
+        }
+      })
+    }
+  })
+
+  window.__aiplang_retry = (binding, path) => {
+    const key = binding.replace(/^@/, '')
+    set(key, [])
+    runQuery({ method: 'GET', path, target: binding })
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────────────
 function boot() {
+  loadSSRData()
   injectActionCSS()
+  initAnimations()
   hydrateBindings()
   hydrateTables()
+  hydrateTableErrors()
   hydrateLists()
   hydrateForms()
+  hydrateOptimistic()
   hydrateBtns()
   hydrateSelects()
   hydrateIfs()
+  hydrateEach()
   mountQueries()
+}
+
+// ── Hydrate each @list { template } ──────────────────────────────
+function hydrateEach() {
+  document.querySelectorAll('[data-fx-each]').forEach(wrap => {
+    const binding = wrap.getAttribute('data-fx-each')
+    const tpl     = wrap.getAttribute('data-fx-tpl') || ''
+    const key     = binding.startsWith('@') ? binding.slice(1) : binding
+
+    const render = () => {
+      let items = get(key)
+      if (!Array.isArray(items)) items = []
+      wrap.innerHTML = ''
+
+      if (!items.length) {
+        const empty = document.createElement('div')
+        empty.className = 'fx-each-empty fx-td-empty'
+        empty.textContent = wrap.getAttribute('data-fx-empty') || 'No items.'
+        wrap.appendChild(empty)
+        return
+      }
+
+      items.forEach(item => {
+        const div = document.createElement('div')
+        div.className = 'fx-each-item'
+        // Interpolate {item.field} syntax in template
+        const html = tpl.replace(/\{item\.([^}]+)\}/g, (_, field) => {
+          const parts = field.split('.')
+          let val = item
+          for (const p of parts) val = val?.[p]
+          return val != null ? String(val) : ''
+        })
+        div.textContent = html || (item.name || item.title || item.label || JSON.stringify(item))
+        wrap.appendChild(div)
+      })
+    }
+
+    watch(key, render)
+    render()
+  })
 }
 
 if (document.readyState === 'loading') {

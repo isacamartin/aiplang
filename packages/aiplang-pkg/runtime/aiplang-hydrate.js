@@ -6,20 +6,44 @@
 const cfg = window.__AIPLANG_PAGE__
 if (!cfg) return
 
+// ── Global Store — cross-page state (like React Context / Zustand) ─
+const _STORE_KEY = 'aiplang_store_v1'
+const _globalStore = (() => {
+  try { return JSON.parse(sessionStorage.getItem(_STORE_KEY) || '{}') } catch { return {} }
+})()
+function syncStore(key, value) {
+  _globalStore[key] = value
+  try { sessionStorage.setItem(_STORE_KEY, JSON.stringify(_globalStore)) } catch {}
+  try { new BroadcastChannel(_STORE_KEY).postMessage({ key, value }) } catch {}
+}
+
+// ── Page-level State ─────────────────────────────────────────────
 const _state = {}
 const _watchers = {}
+const _storeKeys = new Set((cfg.stores || []).map(s => s.key))
 
-for (const [k, v] of Object.entries(cfg.state || {})) {
-  try { _state[k] = JSON.parse(v) } catch { _state[k] = v }
+// Bootstrap state: SSR data > global store > page state declarations
+const _boot = { ...(window.__SSR_DATA__ || {}), ..._globalStore }
+for (const [k, v] of Object.entries({ ...(cfg.state || {}), ..._boot })) {
+  try { _state[k] = typeof v === 'string' && (v.startsWith('[') || v.startsWith('{') || v === 'true' || v === 'false' || !isNaN(v)) ? JSON.parse(v) : v } catch { _state[k] = v }
 }
 
 function get(key) { return _state[key] }
 
-function set(key, value) {
+function set(key, value, _persist) {
   if (JSON.stringify(_state[key]) === JSON.stringify(value)) return
   _state[key] = value
+  if (_storeKeys.has(key) || _persist) syncStore(key, value)
   notify(key)
 }
+
+// Cross-tab store sync (other pages update when store changes)
+try {
+  const _bc = new BroadcastChannel(_STORE_KEY)
+  _bc.onmessage = ({ data: { key, value } }) => {
+    _state[key] = value; notify(key)
+  }
+} catch {}
 
 function watch(key, cb) {
   if (!_watchers[key]) _watchers[key] = []
@@ -741,6 +765,9 @@ function boot() {
   hydrateSelects()
   hydrateIfs()
   hydrateEach()
+  hydrateCharts()
+  hydrateKanban()
+  hydrateEditors()
   mountQueries()
 }
 

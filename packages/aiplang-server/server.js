@@ -761,7 +761,18 @@ function parseFrontPage(src) {
       // Auto-detect target from path if not specified: ~mount GET /api/users → @users
       const autoTarget = pts[3] || ('@' + (pts[2]?.split('/').filter(Boolean).pop()?.split('?')[0]||'data'))
       p.queries.push({trigger:'mount',method:pts[1],path:pts[2],target:ai===-1?autoTarget:null,action:ai!==-1?pts.slice(ai+1).join(' '):null})
-    } else if(pts[0]==='interval')p.queries.push({trigger:'interval',interval:parseInt(pts[1]),method:pts[2],path:pts[3],target:ai===-1?pts[4]:null,action:ai!==-1?pts.slice(ai+1).join(' '):null})}
+    } else if(pts[0]==='interval') {
+      p.queries.push({trigger:'interval',interval:parseInt(pts[1]),method:pts[2],path:pts[3],target:ai===-1?pts[4]:null,action:ai!==-1?pts.slice(ai+1).join(' '):null})
+    } else if(pts[0]==='ssr') {
+      const target = (ai!==-1 ? pts[ai+1] : pts[3] || ('@'+(pts[2]?.split('/').filter(Boolean).pop()||'data'))).replace(/^@/,'')
+      p.ssr = p.ssr || []
+      p.ssr.push({ method: pts[1]||'GET', path: pts[2], target })
+    } else if(pts[0]==='store') {
+      const sk = (pts[1]||'').replace(/^@/,'')
+      p.stores = p.stores || []
+      p.stores.push({ key: sk, method: pts[2], path: pts[3], persist: pts.find(x=>x.startsWith('persist='))?.slice(8)||'session' })
+      p.queries.push({ trigger:'mount', method:pts[2], path:pts[3], target:'@'+sk })
+    }}
     else p.blocks.push({kind:blockKind(line),rawLine:line})
   }
   return p
@@ -1828,7 +1839,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.10.2',
+    status:'ok', version:'2.10.3',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.10.2'
+const VERSION     = '2.10.3'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -768,6 +768,42 @@ function parseBlock(line) {
     return{kind:'if',cond:line.slice(3,bi).trim(),inner:line.slice(bi+1,line.lastIndexOf('}')).trim(),extraClass,animate}
   }
 
+  // ── chart{} — data visualization ───────────────────────────────
+  if(line.startsWith('chart{') || line.startsWith('chart ')) {
+    const bi=line.indexOf('{'); if(bi===-1) return null
+    const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
+    const parts=body.split('|').map(x=>x.trim())
+    const type=parts.find(p=>['bar','line','pie','area','donut'].includes(p))||'bar'
+    const binding=parts.find(p=>p.startsWith('@'))||''
+    const labels=parts.find(p=>p.startsWith('x:'))?.slice(2)||'label'
+    const values=parts.find(p=>p.startsWith('y:'))?.slice(2)||'value'
+    const title=parts.find(p=>!p.startsWith('@')&&!['bar','line','pie','area','donut'].includes(p)&&!p.startsWith('x:')&&!p.startsWith('y:'))||''
+    return{kind:'chart',type,binding,labels,values,title,extraClass,animate,variant,style}
+  }
+
+  // ── kanban{} — drag-and-drop board ───────────────────────────────
+  if(line.startsWith('kanban{') || line.startsWith('kanban ')) {
+    const bi=line.indexOf('{'); if(bi===-1) return null
+    const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
+    const parts=body.split('|').map(x=>x.trim())
+    const binding=parts.find(p=>p.startsWith('@'))||''
+    const cols=parts.filter(p=>!p.startsWith('@')&&!p.startsWith('status:'))
+    const statusField=parts.find(p=>p.startsWith('status:'))?.slice(7)||'status'
+    const updatePath=parts.find(p=>p.startsWith('PUT ')||p.startsWith('PATCH '))||''
+    return{kind:'kanban',binding,cols,statusField,updatePath,extraClass,animate,style}
+  }
+
+  // ── editor{} — rich text editor ──────────────────────────────────
+  if(line.startsWith('editor{') || line.startsWith('editor ')) {
+    const bi=line.indexOf('{'); if(bi===-1) return null
+    const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
+    const parts=body.split('|').map(x=>x.trim())
+    const name=parts[0]||'content'
+    const placeholder=parts[1]||'Start writing...'
+    const submitPath=parts.find(p=>p.startsWith('POST ')||p.startsWith('PUT '))||''
+    return{kind:'editor',name,placeholder,submitPath,extraClass,animate,style}
+  }
+
   // ── each @list { template } — loop como React .map() ────────
   if(line.startsWith('each ')) {
     const bi=line.indexOf('{');if(bi===-1) return null
@@ -824,7 +860,7 @@ function applyMods(html, b) {
 function renderPage(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','list','form','if','btn','select','faq'].includes(b.kind))
   const body=page.blocks.map(b=>{try{return applyMods(renderBlock(b,page),b)}catch(e){console.error('[aiplang] Block render error:',b.kind,e.message);return ''}}).join('')
-  const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries}):''
+  const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries,stores:page.stores||[],computed:page.computed||{}}):''
   const hydrate=needsJS?`\n<script>window.__AIPLANG_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
   const customVars=page.customTheme?genCustomThemeVars(page.customTheme):''
   const themeVarCSS=page.themeVars?genThemeVarCSS(page.themeVars):''
@@ -875,10 +911,53 @@ function renderBlock(b, page) {
     case 'badge':       return `<div class="fx-badge-row"><span class="fx-badge-tag">${esc(b.content||'')}</span></div>\n`
     case 'card':        return rCardBlock(b)
     case 'cols':        return rColsBlock(b)
+    case 'chart':       return rChart(b)
+    case 'kanban':      return rKanban(b)
+    case 'editor':      return rEditor(b)
     case 'each':        return `<div class="fx-each fx-each-${b.variant||'list'}" data-fx-each="${esc(b.binding||'')}" data-fx-tpl="${esc(b.tpl||'')}"${b.style?` style="${b.style.replace(/,/g,';')}"`:''}>\n<div class="fx-each-empty fx-td-empty">Loading...</div></div>\n`
     case 'if':          return `<div class="fx-if-wrap" data-fx-if="${esc(b.cond)}" style="display:none"></div>\n`
     default: return ''
   }
+}
+
+// ── Chart — lazy-loads Chart.js from CDN ────────────────────────
+function rChart(b) {
+  const id = 'chart_' + Math.random().toString(36).slice(2,8)
+  const binding = b.binding || ''
+  const style = b.style ? ` style="${b.style.replace(/,/g,';')}"` : ''
+  return `<div class="fx-chart-wrap"${style}>
+  ${b.title ? `<div class="fx-chart-title">${esc(b.title)}</div>` : ''}
+  <canvas id="${id}" class="fx-chart" data-fx-chart="${esc(binding)}" data-chart-type="${esc(b.type||'bar')}" data-chart-labels="${esc(b.labels||'label')}" data-chart-values="${esc(b.values||'value')}"></canvas>
+</div>\n`
+}
+
+// ── Kanban — drag-and-drop board ─────────────────────────────────
+function rKanban(b) {
+  const cols = (b.cols||['Todo','In Progress','Done'])
+  const colsHtml = cols.map(col => `
+    <div class="fx-kanban-col" data-col="${esc(col)}">
+      <div class="fx-kanban-col-title">${esc(col)}</div>
+      <div class="fx-kanban-cards" data-status="${esc(col)}"></div>
+    </div>`).join('')
+  const style = b.style ? ` style="${b.style.replace(/,/g,';')}"` : ''
+  return `<div class="fx-kanban" data-fx-kanban="${esc(b.binding||'')}" data-status-field="${esc(b.statusField||'status')}" data-update-path="${esc(b.updatePath||'')}"${style}>${colsHtml}</div>\n`
+}
+
+// ── Rich text editor ──────────────────────────────────────────────
+function rEditor(b) {
+  const style = b.style ? ` style="${b.style.replace(/,/g,';')}"` : ''
+  return `<div class="fx-editor-wrap"${style}>
+  <div class="fx-editor-toolbar">
+    <button type="button" onclick="document.execCommand('bold')" class="fx-editor-btn" title="Bold"><b>B</b></button>
+    <button type="button" onclick="document.execCommand('italic')" class="fx-editor-btn" title="Italic"><i>I</i></button>
+    <button type="button" onclick="document.execCommand('underline')" class="fx-editor-btn" title="Underline"><u>U</u></button>
+    <button type="button" onclick="document.execCommand('insertUnorderedList')" class="fx-editor-btn" title="List">≡</button>
+    <button type="button" onclick="document.execCommand('createLink',false,prompt('URL:'))" class="fx-editor-btn" title="Link">🔗</button>
+    ${b.submitPath ? `<button type="button" class="fx-editor-save fx-btn" data-editor-save="${esc(b.submitPath)}" data-editor-field="${esc(b.name||'content')}">Save</button>` : ''}
+  </div>
+  <div class="fx-editor" contenteditable="true" data-fx-editor="${esc(b.name||'content')}" placeholder="${esc(b.placeholder||'Start writing...')}"></div>
+  <input type="hidden" name="${esc(b.name||'content')}" class="fx-editor-hidden">
+</div>\n`
 }
 
 function rCardBlock(b) {
@@ -1129,6 +1208,9 @@ function css(theme) {
 .fx-pricing-compact{border-radius:.875rem;padding:1.25rem;display:flex;align-items:center;gap:1rem;border:1px solid rgba(255,255,255,.08)}
 .fx-pricing-price-sm{font-size:1.5rem;font-weight:800;letter-spacing:-.04em}
 .fx-grid-numbered>.fx-card{counter-increment:card-counter}
+.fx-chart-wrap{padding:1rem 2.5rem;position:relative}.fx-chart-title{font-family:monospace;font-size:.65rem;letter-spacing:.1em;text-transform:uppercase;color:#475569;margin-bottom:.75rem}.fx-chart{max-height:320px}
+.fx-kanban{display:flex;gap:1rem;padding:1rem 2.5rem;overflow-x:auto;align-items:flex-start}.fx-kanban-col{flex:0 0 280px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:.875rem;padding:1rem}.fx-kanban-col-title{font-family:monospace;font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#64748b;margin-bottom:.875rem}.fx-kanban-cards{min-height:80px;display:flex;flex-direction:column;gap:.5rem}.fx-kanban-card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:.5rem;padding:.75rem;cursor:grab;font-size:.8125rem;line-height:1.5;transition:transform .15s,box-shadow .15s}.fx-kanban-card:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.3)}.fx-kanban-card.dragging{opacity:.5;cursor:grabbing}
+.fx-editor-wrap{padding:.75rem 2.5rem}.fx-editor-toolbar{display:flex;gap:.25rem;margin-bottom:.5rem;flex-wrap:wrap}.fx-editor-btn{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#e2e8f0;border-radius:.375rem;padding:.25rem .625rem;cursor:pointer;font-size:.8125rem;font-family:inherit;transition:background .1s}.fx-editor-btn:hover{background:rgba(255,255,255,.12)}.fx-editor{min-height:160px;padding:1rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:.625rem;color:#e2e8f0;font-size:.875rem;line-height:1.7;outline:none}.fx-editor:empty::before{content:attr(placeholder);color:#475569;pointer-events:none}.fx-editor-save{margin-left:auto}
 .fx-grid-numbered>.fx-card::before{content:counter(card-counter,decimal-leading-zero);font-size:2rem;font-weight:900;opacity:.15;font-family:monospace;line-height:1}
 .fx-grid-bordered>.fx-card{border:1px solid rgba(255,255,255,.08)}@keyframes fx-fade-up{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}@keyframes fx-fade-in{from{opacity:0}to{opacity:1}}@keyframes fx-slide-left{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}@keyframes fx-slide-right{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:none}}@keyframes fx-zoom-in{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}@keyframes fx-blur-in{from{opacity:0;filter:blur(8px)}to{opacity:1;filter:blur(0)}}.fx-anim-fade-up{animation:fx-fade-up .6s cubic-bezier(.4,0,.2,1) both}.fx-anim-fade-in{animation:fx-fade-in .6s ease both}.fx-anim-slide-left{animation:fx-slide-left .6s cubic-bezier(.4,0,.2,1) both}.fx-anim-slide-right{animation:fx-slide-right .6s cubic-bezier(.4,0,.2,1) both}.fx-anim-zoom-in{animation:fx-zoom-in .5s cubic-bezier(.4,0,.2,1) both}.fx-anim-blur-in{animation:fx-blur-in .7s ease both}.fx-anim-stagger>.fx-card:nth-child(1){animation:fx-fade-up .5s 0s both}.fx-anim-stagger>.fx-card:nth-child(2){animation:fx-fade-up .5s .1s both}.fx-anim-stagger>.fx-card:nth-child(3){animation:fx-fade-up .5s .2s both}.fx-anim-stagger>.fx-card:nth-child(4){animation:fx-fade-up .5s .3s both}.fx-anim-stagger>.fx-card:nth-child(5){animation:fx-fade-up .5s .4s both}.fx-anim-stagger>.fx-card:nth-child(6){animation:fx-fade-up .5s .5s both}`
 

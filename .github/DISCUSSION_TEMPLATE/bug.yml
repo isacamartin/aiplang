@@ -1,0 +1,34 @@
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por reportar! Preencha os campos abaixo para nos ajudar a reproduzir o problema.
+  - type: input
+    id: version
+    attributes:
+      label: Versão do aiplang
+      placeholder: "ex: 2.9.1"
+    validations:
+      required: true
+  - type: textarea
+    id: aip
+    attributes:
+      label: Arquivo .aip (ou trecho relevante)
+      render: aip
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Erro completo
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado vs atual
+    validations:
+      required: true

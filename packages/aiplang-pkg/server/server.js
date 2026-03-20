@@ -613,7 +613,18 @@ function parseApp(src) {
       else if (line.startsWith('~belongs '))curModel.relationships.push({ type:'belongsTo', model:line.slice(9).trim() })
       else if (line.startsWith('~hook '))   curModel.hooks.push(line.slice(6).trim())
       else if (line === '~soft-delete')     curModel.softDelete = true
-      else if (line && line !== '{')        curModel.fields.push(parseField(line))
+      else if (line && line !== '{') {
+      // Support both multi-line and compact single-line field defs
+      if (line.startsWith('~')) {
+        if (line === '~soft-delete') curModel.softDelete = true
+        else if (line.startsWith('~belongs ')) curModel.relationships.push({type:'belongsTo',model:line.slice(9).trim()})
+      } else if (!line.includes(' ') && line.includes(':')) {
+        // Compact: "email:text:unique:required"
+        curModel.fields.push(parseFieldCompact(line))
+      } else {
+        curModel.fields.push(parseField(line))
+      }
+    }
       i++; continue
     }
 
@@ -621,8 +632,12 @@ function parseApp(src) {
       if (inAPI && curAPI) app.apis.push(curAPI)
       const braceIdx = line.indexOf('{')
       const closeBraceIdx = line.lastIndexOf('}')
-      const pts = line.slice(4, braceIdx).trim().split(/\s+/)
-      curAPI = { method:pts[0], path:pts[1], guards:[], validate:[], query:[], body:[], return:null }
+      const rawHead = line.slice(4, braceIdx).trim()
+      // Shorthand: api GET /path => auth,admin { — arrow guard syntax
+      const arrowM = rawHead.match(/^(\S+)\s+(\S+)\s*=>\s*([\w,]+)\s*$/)
+      const pts = (arrowM ? rawHead.slice(0, rawHead.indexOf('=>')).trim() : rawHead).split(/\s+/)
+      const inlineGuards = arrowM ? arrowM[3].split(',').map(g=>g.trim()) : []
+      curAPI = { method:pts[0], path:pts[1], guards:[...inlineGuards], validate:[], query:[], body:[], return:null }
       // Inline api: "api GET /path { ops }" — entire api on one line
       if (braceIdx !== -1 && closeBraceIdx > braceIdx) {
         const inlineBody = line.slice(braceIdx+1, closeBraceIdx).trim()
@@ -648,7 +663,7 @@ function parseApp(src) {
 }
 
 function parseEnvLine(s) { const p=s.split(/\s+/); const ev={name:'',required:false,default:null}; for(const x of p){if(x==='required')ev.required=true;else if(x.includes('=')){const[k,v]=x.split('=');ev.name=k;ev.default=v}else ev.name=x}; return ev }
-function parseDBLine(s) { const p=s.split(/\s+/); return{driver:p[0]||'sqlite',dsn:p[1]||'./app.db'} }
+function parseDBLine(s) { const p=s.split(/\s+/); const d=p[0]||'sqlite'; return{driver:d==='pg'||d==='psql'?'postgres':d,dsn:p[1]||'./app.db'} }
 function parseAuthLine(s) { const p=s.split(/\s+/); const a={provider:'jwt',secret:p[1]||'$JWT_SECRET',expire:'7d',refresh:'30d'}; for(const x of p){if(x.startsWith('expire='))a.expire=x.slice(7);if(x.startsWith('refresh='))a.refresh=x.slice(8);if(x==='google')a.oauth=['google'];if(x==='github')a.oauth=[...(a.oauth||[]),'google']}; return a }
 function parseMailLine(s) { const parts=s.split(/\s+/); const m={driver:parts[0]||'smtp'}; for(const x of parts.slice(1)){const[k,v]=x.split('='); m[k]=v}; return m }
 function parseStripeLine(s) {
@@ -708,12 +723,24 @@ function parseEventLine(s) { const m=s.match(/^(\S+)\s*=>\s*(.+)$/); return{even
 function parseField(line) {
   const p=line.split(':').map(s=>s.trim())
   const f={name:p[0],type:p[1]||'text',modifiers:[],enumVals:[],default:null}
-  // If type is enum, p[2] contains comma-separated values directly
   if (f.type === 'enum' && p[2] && !p[2].startsWith('default=') && !['required','unique','hashed','pk','auto','index'].includes(p[2])) {
     f.enumVals = p[2].split(',').map(v=>v.trim()).filter(Boolean)
     for(let j=3;j<p.length;j++){const x=p[j];if(x.startsWith('default='))f.default=x.slice(8);else if(x)f.modifiers.push(x)}
   } else {
     for(let j=2;j<p.length;j++){const x=p[j];if(x.startsWith('default='))f.default=x.slice(8);else if(x.startsWith('enum:'))f.enumVals=x.slice(5).split(',').map(v=>v.trim());else if(x)f.modifiers.push(x)}
+  }
+  return f
+}
+
+// Compact model field: "email:text:unique:required" single-line
+function parseFieldCompact(def) {
+  const parts = def.trim().split(':').map(s=>s.trim()).filter(Boolean)
+  const f = {name:parts[0], type:parts[1]||'text', modifiers:[], enumVals:[], default:null}
+  for (let i=2; i<parts.length; i++) {
+    const x = parts[i]
+    if (x.startsWith('default=')) f.default = x.slice(8)
+    else if (/^[a-z]+,[a-z]/.test(x)) f.enumVals = x.split(',').map(v=>v.trim())
+    else f.modifiers.push(x)
   }
   return f
 }
@@ -727,10 +754,14 @@ function parseFrontPage(src) {
   const lines=src.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'))
   const p={id:'page',theme:'dark',route:'/',themeVars:null,state:{},queries:[],blocks:[]}
   for(const line of lines){
-    if(line.startsWith('%')){const pts=line.slice(1).trim().split(/\s+/);p.id=pts[0]||'page';p.route=pts[2]||'/';const rt=pts[1]||'dark';if(rt.includes('#')){const c=rt.split(',');p.theme='custom';p.customTheme={bg:c[0],text:c[1]||'#f1f5f9',accent:c[2]||'#2563eb'}}else p.theme=rt}
+    if(line.startsWith('%')){const pts=line.slice(1).trim().split(/\s+/);p.id=pts[0]||'page';p.route=pts[2]||'/';const cachePt=pts.find(x=>x.startsWith('cache='));if(cachePt)p.cacheTTL=parseInt(cachePt.slice(6));const rt=pts[1]||'dark';if(rt.includes('#')){const c=rt.split(',');p.theme='custom';p.customTheme={bg:c[0],text:c[1]||'#f1f5f9',accent:c[2]||'#2563eb'}}else p.theme=rt}
     else if(line.startsWith('~theme ')){p.themeVars=p.themeVars||{};line.slice(7).trim().split(/\s+/).forEach(pair=>{const eq=pair.indexOf('=');if(eq!==-1)p.themeVars[pair.slice(0,eq)]=pair.slice(eq+1)})}
     else if(line.startsWith('@')&&line.includes('=')){const eq=line.indexOf('=');p.state[line.slice(1,eq).trim()]=line.slice(eq+1).trim()}
-    else if(line.startsWith('~')){const pts=line.slice(1).trim().split(/\s+/);const ai=pts.indexOf('=>');if(pts[0]==='mount')p.queries.push({trigger:'mount',method:pts[1],path:pts[2],target:ai===-1?pts[3]:null,action:ai!==-1?pts.slice(ai+1).join(' '):null});else if(pts[0]==='interval')p.queries.push({trigger:'interval',interval:parseInt(pts[1]),method:pts[2],path:pts[3],target:ai===-1?pts[4]:null,action:ai!==-1?pts.slice(ai+1).join(' '):null})}
+    else if(line.startsWith('~')){const pts=line.slice(1).trim().split(/\s+/);const ai=pts.indexOf('=>');if(pts[0]==='mount'){
+      // Auto-detect target from path if not specified: ~mount GET /api/users → @users
+      const autoTarget = pts[3] || ('@' + (pts[2]?.split('/').filter(Boolean).pop()?.split('?')[0]||'data'))
+      p.queries.push({trigger:'mount',method:pts[1],path:pts[2],target:ai===-1?autoTarget:null,action:ai!==-1?pts.slice(ai+1).join(' '):null})
+    } else if(pts[0]==='interval')p.queries.push({trigger:'interval',interval:parseInt(pts[1]),method:pts[2],path:pts[3],target:ai===-1?pts[4]:null,action:ai!==-1?pts.slice(ai+1).join(' '):null})}
     else p.blocks.push({kind:blockKind(line),rawLine:line})
   }
   return p
@@ -1797,7 +1828,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.10.1',
+    status:'ok', version:'2.10.2',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

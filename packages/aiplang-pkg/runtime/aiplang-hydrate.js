@@ -6,7 +6,6 @@
 const cfg = window.__AIPLANG_PAGE__
 if (!cfg) return
 
-// ── State ────────────────────────────────────────────────────────
 const _state = {}
 const _watchers = {}
 
@@ -28,7 +27,6 @@ function watch(key, cb) {
   return () => { _watchers[key] = _watchers[key].filter(f => f !== cb) }
 }
 
-// Batched notify — queues all pending updates and flushes in rAF (like React's batching)
 const _pending = new Set()
 let _batchScheduled = false
 
@@ -48,7 +46,6 @@ function notify(key) {
   }
 }
 
-// Force immediate flush (for critical updates like form submit)
 function notifySync(key) {
   ;(_watchers[key] || []).forEach(cb => cb(_state[key]))
 }
@@ -63,12 +60,10 @@ function resolve(str) {
   })
 }
 
-// Resolve path with row data: /api/users/{id} + {id:1} → /api/users/1
 function resolvePath(tmpl, row) {
   return tmpl.replace(/\{([^}]+)\}/g, (_, k) => row?.[k] ?? get(k) ?? '')
 }
 
-// ── Query Engine ─────────────────────────────────────────────────
 const _intervals = []
 
 async function runQuery(q) {
@@ -96,11 +91,11 @@ function applyAction(data, target, action) {
     if (pm) { set(pm[1], [...(get(pm[1]) || []), data]); return }
     const fm = action.match(/^@([a-zA-Z_]+)\.filter\((.+)\)$/)
     if (fm) {
-      // Safe filter: @list.filter(item.status=active) style — no eval/new Function
+
       try {
         const expr = fm[2].trim()
         const filtered = (get(fm[1]) || []).filter(item => {
-          // Support simple: field=value or field!=value
+
           const eq = expr.match(/^([a-zA-Z_.]+)\s*(!?=)\s*(.+)$/)
           if (eq) {
             const [, field, op, val] = eq
@@ -132,7 +127,6 @@ function mountQueries() {
   }
 }
 
-// ── HTTP helper ──────────────────────────────────────────────────
 async function http(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } }
   if (body) opts.body = JSON.stringify(body)
@@ -141,7 +135,6 @@ async function http(method, path, body) {
   return { ok: res.ok, status: res.status, data }
 }
 
-// ── Toast notifications ──────────────────────────────────────────
 function toast(msg, type) {
   const t = document.createElement('div')
   t.textContent = msg
@@ -158,7 +151,6 @@ function toast(msg, type) {
   setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300) }, 2500)
 }
 
-// ── Confirm modal ────────────────────────────────────────────────
 function confirm(msg) {
   return new Promise(resolve => {
     const overlay = document.createElement('div')
@@ -179,7 +171,6 @@ function confirm(msg) {
   })
 }
 
-// ── Edit modal ───────────────────────────────────────────────────
 function editModal(row, cols, path, method, stateKey) {
   return new Promise(resolve => {
     const overlay = document.createElement('div')
@@ -228,21 +219,19 @@ function editModal(row, cols, path, method, stateKey) {
   })
 }
 
-// ── Hydrate tables with CRUD ─────────────────────────────────────
 function hydrateTables() {
   document.querySelectorAll('[data-fx-table]').forEach(tbl => {
     const binding   = tbl.getAttribute('data-fx-table')
     const colsJSON  = tbl.getAttribute('data-fx-cols')
-    const editPath  = tbl.getAttribute('data-fx-edit')    // e.g. /api/users/{id}
+    const editPath  = tbl.getAttribute('data-fx-edit')
     const editMethod= tbl.getAttribute('data-fx-edit-method') || 'PUT'
-    const delPath   = tbl.getAttribute('data-fx-delete')  // e.g. /api/users/{id}
+    const delPath   = tbl.getAttribute('data-fx-delete')
     const delKey    = tbl.getAttribute('data-fx-delete-key') || 'id'
 
     const cols  = colsJSON ? JSON.parse(colsJSON) : []
     const tbody = tbl.querySelector('tbody')
     if (!tbody) return
 
-    // Add action column headers if needed
     if ((editPath || delPath) && tbl.querySelector('thead tr')) {
       const thead = tbl.querySelector('thead tr')
       if (!thead.querySelector('.fx-th-actions')) {
@@ -269,37 +258,71 @@ function hydrateTables() {
         return
       }
 
-      // Virtual rendering: only render visible rows for large datasets
-      const VIRTUAL_THRESHOLD = 100
-      const ROW_HEIGHT = 44 // px
+      const VIRTUAL_THRESHOLD = 80
+      const OVERSCAN = 8
+      const colSpanTotal = cols.length + (editPath || delPath ? 1 : 0)
       const useVirtual = rows.length >= VIRTUAL_THRESHOLD
+      let rowHeights = null, totalHeight = 0, scrollListener = null
 
       if (useVirtual) {
-        const wrapDiv = tbody.closest('.fx-table-wrap') || tbody.parentElement
-        const visible = Math.ceil((wrapDiv.clientHeight || 400) / ROW_HEIGHT) + 10
-        const scrollTop = wrapDiv.scrollTop || 0
-        const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 5)
-        const endIdx = Math.min(rows.length - 1, startIdx + visible)
+        const wrapDiv = tbl.closest('.fx-table-wrap') || tbl.parentElement
+        wrapDiv.style.cssText += ';max-height:520px;overflow-y:auto;position:relative'
 
-        // Spacer before
-        if (startIdx > 0) {
-          const spacerTr = document.createElement('tr')
-          const spacerTd = document.createElement('td')
-          spacerTd.colSpan = cols.length + (editPath || delPath ? 1 : 0)
-          spacerTd.style.height = (startIdx * ROW_HEIGHT) + 'px'
-          spacerTd.style.padding = '0'
-          spacerTr.appendChild(spacerTd)
-          tbody.appendChild(spacerTr)
+        const measureRow = rows[0]
+        const tempTr = document.createElement('tr')
+        tempTr.style.visibility = 'hidden'
+        cols.forEach(col => {
+          const td = document.createElement('td'); td.className = 'fx-td'
+          td.textContent = measureRow[col.key] || ''; tempTr.appendChild(td)
+        })
+        tbody.appendChild(tempTr)
+        const rowH = Math.max(tempTr.getBoundingClientRect().height, 40) || 44
+        tbody.removeChild(tempTr)
+
+        const viewH = wrapDiv.clientHeight || 480
+        const visibleCount = Math.ceil(viewH / rowH) + OVERSCAN * 2
+
+        const renderVirtual = () => {
+          const scrollTop = wrapDiv.scrollTop
+          const startRaw = Math.floor(scrollTop / rowH)
+          const start = Math.max(0, startRaw - OVERSCAN)
+          const end   = Math.min(rows.length - 1, start + visibleCount)
+          const paddingTop = start * rowH
+          const paddingBot = Math.max(0, (rows.length - end - 1) * rowH)
+
+          tbody.innerHTML = ''
+
+          if (paddingTop > 0) {
+            const tr = document.createElement('tr')
+            const td = document.createElement('td')
+            td.colSpan = colSpanTotal; td.style.cssText = 'height:'+paddingTop+'px;padding:0;border:none'
+            tr.appendChild(td); tbody.appendChild(tr)
+          }
+
+          for (let i = start; i <= end; i++) renderRow(rows[i], i)
+
+          if (paddingBot > 0) {
+            const tr = document.createElement('tr')
+            const td = document.createElement('td')
+            td.colSpan = colSpanTotal; td.style.cssText = 'height:'+paddingBot+'px;padding:0;border:none'
+            tr.appendChild(td); tbody.appendChild(tr)
+          }
         }
-        rows = rows.slice(startIdx, endIdx + 1)
+
+        let rafPending = false
+        scrollListener = () => {
+          if (rafPending) return; rafPending = true
+          requestAnimationFrame(() => { rafPending = false; renderVirtual() })
+        }
+        wrapDiv.addEventListener('scroll', scrollListener, { passive: true })
+        renderVirtual()
+        return
       }
 
-      rows.forEach((row, idx) => {
+      function renderRow(row, idx) {
         const tr = document.createElement('tr')
         tr.className = 'fx-tr'
-        if (useVirtual) tr.style.height = ROW_HEIGHT + 'px'
 
-        // Data cells
         for (const col of cols) {
           const td = document.createElement('td')
           td.className = 'fx-td'
@@ -307,7 +330,6 @@ function hydrateTables() {
           tr.appendChild(td)
         }
 
-        // Action cell
         if (editPath || delPath) {
           const td = document.createElement('td')
           td.className = 'fx-td fx-td-actions'
@@ -351,7 +373,9 @@ function hydrateTables() {
           tr.appendChild(td)
         }
         tbody.appendChild(tr)
-      })
+      }
+
+      rows.forEach((row, idx) => renderRow(row, idx))
     }
 
     const stateKey = binding.startsWith('@') ? binding.slice(1) : binding
@@ -360,7 +384,6 @@ function hydrateTables() {
   })
 }
 
-// ── Hydrate lists ────────────────────────────────────────────────
 function hydrateLists() {
   document.querySelectorAll('[data-fx-list]').forEach(wrap => {
     const binding  = wrap.getAttribute('data-fx-list')
@@ -389,7 +412,6 @@ function hydrateLists() {
   })
 }
 
-// ── Hydrate forms ─────────────────────────────────────────────────
 function hydrateForms() {
   document.querySelectorAll('[data-fx-form]').forEach(form => {
     const path   = form.getAttribute('data-fx-form')
@@ -424,8 +446,6 @@ function hydrateForms() {
   })
 }
 
-// ── Hydrate btns ──────────────────────────────────────────────────
-// <button data-fx-btn="/api/path" data-fx-method="POST" data-fx-action="...">
 function hydrateBtns() {
   document.querySelectorAll('[data-fx-btn]').forEach(btn => {
     const path   = btn.getAttribute('data-fx-btn')
@@ -452,8 +472,6 @@ function hydrateBtns() {
   })
 }
 
-// ── Hydrate select dropdowns ──────────────────────────────────────
-// <select data-fx-model="@filter"> sets @filter on change
 function hydrateSelects() {
   document.querySelectorAll('[data-fx-model]').forEach(sel => {
     const binding = sel.getAttribute('data-fx-model')
@@ -464,7 +482,6 @@ function hydrateSelects() {
   })
 }
 
-// ── Hydrate text bindings ─────────────────────────────────────────
 function hydrateBindings() {
   document.querySelectorAll('[data-fx-bind]').forEach(el => {
     const expr = el.getAttribute('data-fx-bind')
@@ -475,7 +492,6 @@ function hydrateBindings() {
   })
 }
 
-// ── Hydrate conditionals ──────────────────────────────────────────
 function hydrateIfs() {
   document.querySelectorAll('[data-fx-if]').forEach(wrap => {
     const cond = wrap.getAttribute('data-fx-if')
@@ -496,9 +512,8 @@ function hydrateIfs() {
   })
 }
 
-// ── Advanced Animations (scroll-triggered + stagger) ─────────────
 function initAnimations() {
-  // Extended animation presets — beyond what React ships by default
+
   const style = document.createElement('style')
   style.textContent = `
     @keyframes fx-blur-in   { from{opacity:0;filter:blur(8px);transform:translateY(8px)} to{opacity:1;filter:blur(0);transform:none} }
@@ -532,7 +547,6 @@ function initAnimations() {
   `
   document.head.appendChild(style)
 
-  // Intersection Observer — trigger when element scrolls into view (like Framer whileInView)
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
@@ -543,14 +557,57 @@ function initAnimations() {
   }, { threshold: 0.12, rootMargin: '0px 0px -30px 0px' })
 
   document.querySelectorAll('[class*="fx-anim-"]').forEach(el => {
-    // bounce and pulse run immediately
+
     if (el.classList.contains('fx-anim-bounce') || el.classList.contains('fx-anim-pulse')) {
       el.classList.add('fx-visible'); return
     }
     observer.observe(el)
   })
 
-  // Counter animation — numbers count up on scroll-in
+  window.aiplang = window.aiplang || {}
+  window.aiplang.spring = function(el, prop, from, to, opts = {}) {
+    const k  = opts.stiffness || 180
+    const b  = opts.damping   || 22
+    const m  = opts.mass      || 1
+    let pos = from, vel = 0
+    const dt = 1/60
+    let raf
+
+    const tick = () => {
+      const F = -k * (pos - to) - b * vel
+      vel += (F / m) * dt
+      pos += vel * dt
+      if (Math.abs(pos - to) < 0.01 && Math.abs(vel) < 0.01) {
+        pos = to
+        el.style[prop] = pos + (opts.unit || 'px')
+        return
+      }
+      el.style[prop] = pos + (opts.unit || 'px')
+      raf = requestAnimationFrame(tick)
+    }
+    cancelAnimationFrame(raf)
+    requestAnimationFrame(tick)
+  }
+
+  const springObs = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return
+      const el = entry.target
+      if (el.classList.contains('fx-anim-spring')) {
+        el.style.opacity = '1'
+        el.style.transform = 'translateY(0px)'
+        window.aiplang.spring(el, '--spring-y', 24, 0, { stiffness: 200, damping: 20, unit: 'px' })
+        springObs.unobserve(el)
+      }
+    })
+  }, { threshold: 0.1 })
+
+  document.querySelectorAll('.fx-anim-spring').forEach(el => {
+    el.style.opacity = '0'
+    el.style.transform = 'translateY(24px)'
+    springObs.observe(el)
+  })
+
   document.querySelectorAll('.fx-stat-val').forEach(el => {
     const target = parseFloat(el.textContent)
     if (isNaN(target) || target === 0) return
@@ -576,7 +633,6 @@ function initAnimations() {
   })
 }
 
-// ── Inject action column CSS ──────────────────────────────────────
 function injectActionCSS() {
   const style = document.createElement('style')
   style.textContent = `
@@ -595,9 +651,6 @@ function injectActionCSS() {
   document.head.appendChild(style)
 }
 
-// ── SSR Data Injection — pre-populate state from server data ────────
-// Server can inject window.__SSR_DATA__ = {users: [...], stats: {...}}
-// to avoid loading flash (like Next.js getServerSideProps)
 function loadSSRData() {
   const ssr = window.__SSR_DATA__
   if (!ssr) return
@@ -606,8 +659,6 @@ function loadSSRData() {
   }
 }
 
-// ── Optimistic UI ─────────────────────────────────────────────────
-// form data-fx-optimistic="true": updates state instantly, rolls back on error
 function hydrateOptimistic() {
   document.querySelectorAll('[data-fx-optimistic]').forEach(form => {
     const action = form.getAttribute('data-fx-action') || ''
@@ -616,7 +667,7 @@ function hydrateOptimistic() {
     const key = pm[1]
 
     form.addEventListener('submit', (e) => {
-      // Inject a temp item optimistically before submit fires
+
       const body = {}
       form.querySelectorAll('input,select,textarea').forEach(inp => {
         if (inp.name) body[inp.name] = inp.value
@@ -626,26 +677,23 @@ function hydrateOptimistic() {
       const current = [...(get(key) || [])]
       set(key, [...current, optimisticItem])
 
-      // After actual submit (handled by hydrateForms), remove temp if error
       const origAction = form.getAttribute('data-fx-action')
       form.setAttribute('data-fx-action-orig', origAction)
       form.setAttribute('data-fx-action', `@${key}._rollback_${tempId}`)
 
-      // Restore action after tick
       setTimeout(() => {
         form.setAttribute('data-fx-action', origAction)
-        // Clean up optimistic item if real item arrived
+
         setTimeout(() => {
           const arr = get(key) || []
           const hasReal = arr.some(i => !i._optimistic)
           if (hasReal) set(key, arr.filter(i => !i._optimistic || i.id !== tempId))
         }, 500)
       }, 50)
-    }, true) // capture phase — before hydrateForms submit handler
+    }, true)
   })
 }
 
-// ── Error recovery — fallback + retry ────────────────────────────
 function hydrateTableErrors() {
   document.querySelectorAll('[data-fx-fallback]').forEach(tbl => {
     const fallback = tbl.getAttribute('data-fx-fallback')
@@ -656,7 +704,6 @@ function hydrateTableErrors() {
     const tbody = tbl.querySelector('tbody')
     const originalEmpty = tbl.getAttribute('data-fx-empty') || 'No data.'
 
-    // Override runQuery to detect errors for this table's binding
     const key = binding?.replace(/^@/, '') || ''
     if (key) {
       const cleanup = watch(key, (val) => {
@@ -680,7 +727,6 @@ function hydrateTableErrors() {
   }
 }
 
-// ── Boot ──────────────────────────────────────────────────────────
 function boot() {
   loadSSRData()
   injectActionCSS()
@@ -698,7 +744,6 @@ function boot() {
   mountQueries()
 }
 
-// ── Hydrate each @list { template } ──────────────────────────────
 function hydrateEach() {
   document.querySelectorAll('[data-fx-each]').forEach(wrap => {
     const binding = wrap.getAttribute('data-fx-each')
@@ -721,7 +766,7 @@ function hydrateEach() {
       items.forEach(item => {
         const div = document.createElement('div')
         div.className = 'fx-each-item'
-        // Interpolate {item.field} syntax in template
+
         const html = tpl.replace(/\{item\.([^}]+)\}/g, (_, field) => {
           const parts = field.split('.')
           let val = item

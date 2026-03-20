@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.7.1'
+const VERSION     = '2.7.2'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -625,13 +625,16 @@ function parseBlock(line) {
   }
 
   // ── form ────────────────────────────────────────────────────
-  if(line.startsWith('form ')) {
+  if(line.startsWith('form ') || line.startsWith('form{')) {
     const bi=line.indexOf('{');if(bi===-1) return null
-    let head=line.slice(5,bi).trim(); const content=line.slice(bi+1,line.lastIndexOf('}')).trim()
+    let head=line.slice(line.startsWith('form{')?4:5,bi).trim()
+    const content=line.slice(bi+1,line.lastIndexOf('}')).trim()
     let action=''; const ai=head.indexOf('=>')
     if(ai!==-1){action=head.slice(ai+2).trim();head=head.slice(0,ai).trim()}
-    const [method,bpath]=head.split(/\s+/)
-    return{kind:'form',method:method||'POST',bpath:bpath||'',action,fields:parseFields(content),extraClass,animate}
+    const parts=head.trim().split(/\s+/)
+    const method=parts[0]&&['GET','POST','PUT','PATCH','DELETE'].includes(parts[0].toUpperCase())?parts[0].toUpperCase():'POST'
+    const bpath=parts[method===parts[0].toUpperCase()?1:0]||''
+    return{kind:'form',method,bpath,action,fields:parseFields(content)||[],extraClass,animate}
   }
 
   // ── pricing ─────────────────────────────────────────────────
@@ -841,13 +844,15 @@ function rTable(b) {
 }
 
 function rForm(b) {
-  const fields=b.fields.map(f=>{
+  const fields=(b.fields||[]).map(f=>{
+    if(!f) return ''
     const inp=f.type==='select'
       ?`<select class="fx-input" name="${esc(f.name)}"><option value="">Select...</option></select>`
-      :`<input class="fx-input" type="${esc(f.type)}" name="${esc(f.name)}" placeholder="${esc(f.placeholder)}">`
+      :`<input class="fx-input" type="${esc(f.type||'text')}" name="${esc(f.name)}" placeholder="${esc(f.placeholder)}">`
     return`<div class="fx-field"><label class="fx-label">${esc(f.label)}</label>${inp}</div>`
   }).join('')
-  return `<div class="fx-form-wrap"><form class="fx-form" data-fx-form="${esc(b.bpath)}" data-fx-method="${esc(b.method)}" data-fx-action="${esc(b.action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">Submit</button></form></div>\n`
+  const label=b.submitLabel||'Submit'
+  return `<div class="fx-form-wrap"><form class="fx-form" data-fx-form="${esc(b.bpath)}" data-fx-method="${esc(b.method)}" data-fx-action="${esc(b.action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">${esc(label)}</button></form></div>\n`
 }
 
 function rBtn(b) {

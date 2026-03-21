@@ -841,9 +841,9 @@ self.onmessage = function(e) {
     const cached = cache[id]
     if (!cached) { inserts.push({ id, row, idx: i }); continue }
     for (let c = 0; c < colKeys.length; c++) {
-      const nStr = row[colKeys[c]] != null ? String(row[colKeys[c]]) : ''
-      const oStr = cached[c] != null ? String(cached[c]) : ''
-      if (nStr !== oStr) patches.push({ id, col: c, val: row[colKeys[c]] })
+      const nv = row[colKeys[c]] ?? null
+      const ov = cached[c] ?? null
+      if (nv !== ov) patches.push({ id, col: c, val: row[colKeys[c]] })
     }
   }
   for (const id in cache) {
@@ -884,15 +884,31 @@ function _diffAsync(rows, colKeys, rowCache) {
 
 function _diffSync(rows, colKeys, rowCache) {
   const patches = [], inserts = [], deletes = [], seen = new Set()
+  const nCols = colKeys.length
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i], id = r.id != null ? r.id : i
     seen.add(id)
     const c = rowCache.get(id)
     if (!c) { inserts.push({ id, row:r, idx:i }); continue }
-    for (let j = 0; j < colKeys.length; j++) {
-      const n = r[colKeys[j]] != null ? String(r[colKeys[j]]) : ''
-      const o = c.vals[j] != null ? String(c.vals[j]) : ''
-      if (n !== o) patches.push({ id, col:j, val:r[colKeys[j]] })
+    const vals = c.vals
+    // Unrolled loops for 2-4 columns — avoids JS loop overhead (Vue does this via template compiler)
+    if (nCols === 2) {
+      const v0=r[colKeys[0]]??null; if(vals[0]!==v0){patches.push({id,col:0,val:r[colKeys[0]]});vals[0]=v0}
+      const v1=r[colKeys[1]]??null; if(vals[1]!==v1){patches.push({id,col:1,val:r[colKeys[1]]});vals[1]=v1}
+    } else if (nCols === 3) {
+      const v0=r[colKeys[0]]??null; if(vals[0]!==v0){patches.push({id,col:0,val:r[colKeys[0]]});vals[0]=v0}
+      const v1=r[colKeys[1]]??null; if(vals[1]!==v1){patches.push({id,col:1,val:r[colKeys[1]]});vals[1]=v1}
+      const v2=r[colKeys[2]]??null; if(vals[2]!==v2){patches.push({id,col:2,val:r[colKeys[2]]});vals[2]=v2}
+    } else if (nCols === 4) {
+      const v0=r[colKeys[0]]??null; if(vals[0]!==v0){patches.push({id,col:0,val:r[colKeys[0]]});vals[0]=v0}
+      const v1=r[colKeys[1]]??null; if(vals[1]!==v1){patches.push({id,col:1,val:r[colKeys[1]]});vals[1]=v1}
+      const v2=r[colKeys[2]]??null; if(vals[2]!==v2){patches.push({id,col:2,val:r[colKeys[2]]});vals[2]=v2}
+      const v3=r[colKeys[3]]??null; if(vals[3]!==v3){patches.push({id,col:3,val:r[colKeys[3]]});vals[3]=v3}
+    } else {
+      for (let j = 0; j < nCols; j++) {
+        const nv = r[colKeys[j]] ?? null
+        if (vals[j] !== nv) { patches.push({ id, col:j, val:r[colKeys[j]] }); vals[j]=nv }
+      }
     }
   }
   for (const [id] of rowCache) if (!seen.has(id)) deletes.push(id)

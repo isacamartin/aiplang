@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.11.3'
+const VERSION     = '2.11.4'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -60,6 +60,12 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
     {{year}}  current year
 
   Customization:
+    # Bancos de dados suportados:
+    #   ~db sqlite   ./app.db          (padrão — sem configuração)
+    #   ~db pg       $DATABASE_URL     (PostgreSQL)
+    #   ~db mysql    $MYSQL_URL        (MySQL / MariaDB)
+    #   ~db mongodb  $MONGODB_URL      (MongoDB)
+    #   ~db redis    $REDIS_URL        (Redis — cache/session)
     ~theme accent=#7c3aed radius=1.5rem font=Syne bg=#000 text=#fff
     hero{...} animate:fade-up
     row3{...} class:my-class animate:stagger
@@ -680,7 +686,7 @@ function generateTypes(app, srcFile) {
   }
 
   lines.push(`// ── aiplang version ──────────────────────────────────────────`)
-  lines.push(`export const AIPLANG_VERSION     = '2.11.3'`)
+  lines.push(`export const AIPLANG_VERSION     = '2.11.4'`)
   lines.push(``)
   return lines.join('\n')
 }

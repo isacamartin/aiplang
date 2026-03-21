@@ -32,6 +32,12 @@ let SQL, DB_FILE, _db = null
 let _pgPool = null // PostgreSQL connection pool
 let _dbDriver = 'sqlite' // 'sqlite' | 'postgres'
 let _useBetter = false  // true when better-sqlite3 is available
+let _mysqlPool  = null  // MySQL/MariaDB (mysql2)
+let _mongoClient= null  // MongoDB client
+let _mongoDB    = null  // MongoDB database
+let _redisClient= null  // Redis (ioredis)
+let _useMongo   = false
+let _useRedis   = false
 
 async function getDB(dbConfig = { driver: 'sqlite', dsn: ':memory:' }) {
   if (_db || _pgPool) return _db || _pgPool
@@ -39,16 +45,72 @@ async function getDB(dbConfig = { driver: 'sqlite', dsn: ':memory:' }) {
   const dsn = dbConfig.dsn || ':memory:'
   _dbDriver = driver
 
-  if (driver === 'postgres' || driver === 'postgresql' || dsn.startsWith('postgres')) {
+  // ── PostgreSQL ────────────────────────────────────────────────
+  if (driver === 'postgres' || dsn.startsWith('postgres')) {
     try {
       const { Pool } = require('pg')
       _pgPool = new Pool({ connectionString: dsn, ssl: dsn.includes('ssl=true') ? { rejectUnauthorized: false } : false })
-      await _pgPool.query('SELECT 1') // test connection
+      await _pgPool.query('SELECT 1')
       console.log('[aiplang] DB:     PostgreSQL ✓')
       return _pgPool
     } catch (e) {
-      console.error('[aiplang] PostgreSQL connection failed:', e.message)
-      console.log('[aiplang] Falling back to SQLite :memory:')
+      console.error('[aiplang] PostgreSQL falhou:', e.message)
+      _dbDriver = 'sqlite'
+    }
+  }
+
+  // ── MySQL / MariaDB ───────────────────────────────────────────
+  if (driver === 'mysql' || dsn.startsWith('mysql') || dsn.startsWith('mariadb')) {
+    try {
+      const mysql = require('mysql2/promise')
+      _mysqlPool = await mysql.createPool({
+        uri: dsn.startsWith('mariadb') ? dsn.replace('mariadb://', 'mysql://') : dsn,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        ssl: dsn.includes('ssl=true') ? { rejectUnauthorized: false } : undefined
+      })
+      await _mysqlPool.query('SELECT 1')
+      _dbDriver = 'mysql'
+      console.log('[aiplang] DB:     MySQL/MariaDB ✓')
+      return _mysqlPool
+    } catch (e) {
+      console.error('[aiplang] MySQL falhou:', e.message)
+      _dbDriver = 'sqlite'
+    }
+  }
+
+  // ── MongoDB ───────────────────────────────────────────────────
+  if (driver === 'mongodb' || dsn.startsWith('mongodb')) {
+    try {
+      const { MongoClient } = require('mongodb')
+      _mongoClient = new MongoClient(dsn)
+      await _mongoClient.connect()
+      // Extrair nome do banco da URL
+      const dbName = dsn.split('/').pop()?.split('?')[0] || 'aiplang'
+      _mongoDB = _mongoClient.db(dbName)
+      _useMongo = true
+      _dbDriver = 'mongodb'
+      console.log('[aiplang] DB:     MongoDB ✓ (' + dbName + ')')
+      return _mongoDB
+    } catch (e) {
+      console.error('[aiplang] MongoDB falhou:', e.message)
+      _dbDriver = 'sqlite'
+    }
+  }
+
+  // ── Redis ─────────────────────────────────────────────────────
+  if (driver === 'redis' || dsn.startsWith('redis')) {
+    try {
+      const Redis = require('ioredis')
+      _redisClient = new Redis(dsn, { lazyConnect: false, maxRetriesPerRequest: 3 })
+      await _redisClient.ping()
+      _useRedis = true
+      _dbDriver = 'redis'
+      console.log('[aiplang] DB:     Redis ✓')
+      return _redisClient
+    } catch (e) {
+      console.error('[aiplang] Redis falhou:', e.message)
       _dbDriver = 'sqlite'
     }
   }
@@ -89,7 +151,48 @@ function persistDB() {
 }
 let _dirty = false, _persistTimer = null
 
+// ── MongoDB helpers ───────────────────────────────────────────────
+function _sqlWhereToMongo(sql, params) {
+  // Converte WHERE simples: id = ? / email = ? → {id: val, email: val}
+  const filter = {}
+  const whereMatch = sql.match(/WHERE\s+(.+?)(?:ORDER|LIMIT|$)/is)
+  if (!whereMatch) return filter
+  const conditions = whereMatch[1].trim()
+  const parts = conditions.split(/\s+AND\s+/i)
+  let paramIdx = 0
+  for (const part of parts) {
+    const m = part.trim().match(/^(\w+)\s*=\s*\?$/)
+    if (m && paramIdx < params.length) {
+      filter[m[1]] = params[paramIdx++]
+    }
+  }
+  return filter
+}
+
+function _mongoToObj(doc) {
+  if (!doc) return null
+  const { _id, ...rest } = doc
+  return { id: _id?.toString() || rest.id, ...rest }
+}
+
+// ── MySQL: CREATE TABLE equivalente ──────────────────────────────
+function _mysqlType(sqliteType) {
+  return {
+    'TEXT': 'TEXT',
+    'INTEGER': 'INT',
+    'REAL': 'DOUBLE',
+    'BLOB': 'BLOB'
+  }[sqliteType] || 'TEXT'
+}
+
+
 function dbRun(sql, params = []) {
+  if (_mysqlPool) {
+    // MySQL: async, mas dbRun é chamado sync em alguns contextos
+    // Enfileirar de forma segura
+    _mysqlPool.execute(sql, params).catch(e => console.debug('[aiplang:mysql]', e?.message))
+    return
+  }
   if (_useBetter && !_pgPool) {
     // better-sqlite3: synchronous, native — 30x faster than sql.js writes
     _getStmt(sql).run(...params)
@@ -117,7 +220,8 @@ function convertPlaceholders(sql) {
 }
 
 async function dbRunAsync(sql, params = []) {
-  if (_pgPool) return _pgPool.query(convertPlaceholders(sql), params)
+  if (_mysqlPool) return _mysqlPool.execute(sql, params)
+  if (_pgPool)    return _pgPool.query(convertPlaceholders(sql), params)
   dbRun(sql, params)
 }
 
@@ -181,18 +285,18 @@ function _getStmt(sql) {
 }
 
 function dbAll(sql, params = [], _cacheKey = null, _cacheTables = null) {
-  if (_pgPool) return []
+  if (_pgPool)    return []  // PostgreSQL usa dbAllAsync
+  if (_mysqlPool) return []  // MySQL usa dbAllAsync
+  if (_useMongo)  return []  // MongoDB usa dbAllAsync
   if (_cacheKey && !params.length) {
     const cached = _cacheGet(_cacheKey)
     if (cached !== null) return { __cached: true, __body: cached }
   }
   let rows
   if (_useBetter) {
-    // better-sqlite3: synchronous, native, 7x faster
     const stmt = _getStmt(sql)
     rows = params.length ? stmt.all(...params) : stmt.all()
   } else {
-    // sql.js fallback
     const stmt = _db.prepare(sql)
     stmt.bind(params); rows = []
     while (stmt.step()) rows.push(stmt.getAsObject())
@@ -202,12 +306,33 @@ function dbAll(sql, params = [], _cacheKey = null, _cacheTables = null) {
   return rows
 }
 
-async function dbAllAsync(sql, params = []) {
+async function dbAllAsync(sql, params = [], _cacheKey = null, _cacheTables = null) {
+  // Cache check (universal)
+  if (_cacheKey && !params.length) {
+    const cached = _cacheGet(_cacheKey)
+    if (cached !== null) return { __cached: true, __body: cached }
+  }
+  let rows
   if (_pgPool) {
     const r = await _pgPool.query(convertPlaceholders(sql), params)
-    return r.rows
+    rows = r.rows
+  } else if (_mysqlPool) {
+    const [result] = await _mysqlPool.execute(sql, params)
+    rows = result
+  } else if (_useMongo) {
+    // MongoDB: extrair collection do SQL "SELECT * FROM table WHERE..."
+    const tableMatch = sql.match(/FROM\s+(\w+)/i)
+    const collection = tableMatch ? tableMatch[1] : null
+    if (!collection) return []
+    const filter = _sqlWhereToMongo(sql, params)
+    rows = await _mongoDB.collection(collection).find(filter).toArray()
+  } else {
+    rows = dbAll(sql, params)
   }
-  return dbAll(sql, params)
+  if (Array.isArray(rows) && _cacheKey && !params.length) {
+    _cacheSet(_cacheKey, JSON.stringify(rows), _cacheTables)
+  }
+  return rows
 }
 
 function dbGet(sql, params = []) { return dbAll(sql, params)[0] || null }
@@ -460,9 +585,15 @@ function validateAip(source) {
 }
 
 function cacheSet(key, value, ttlMs = 60000) {
+  // Redis: persistir em redis além do cache em memória
+  if (_useRedis) {
+    try { _redisClient.set('aip:' + key, JSON.stringify(value), 'PX', ttlMs).catch(() => {}) } catch {}
+  }
   _cache.set(key, { value, expires: Date.now() + ttlMs })
 }
 function cacheGet(key) {
+  // Redis: verificar redis se não tiver na memória
+  // (retorna null para busca assíncrona — o caller deve usar cacheGetAsync se precisar)
   const item = _cache.get(key)
   if (!item) return null
   if (item.expires < Date.now()) { _cache.delete(key); return null }
@@ -621,6 +752,19 @@ class Model {
 
   // ── Core queries ────────────────────────────────────────────────
   all(opts = {}) {
+    // MongoDB
+    if (_useMongo) {
+      const filter = this.softDelete ? { deleted_at: { $exists: false } } : {}
+      const mongoOpts = {}
+      if (opts.limit)  mongoOpts.limit = parseInt(opts.limit)
+      if (opts.offset) mongoOpts.skip  = parseInt(opts.offset)
+      if (opts.order) {
+        const p = String(opts.order).trim().split(/\s+/)
+        mongoOpts.sort = { [p[0]]: p[1]?.toLowerCase()==='desc' ? -1 : 1 }
+      }
+      return _mongoDB.collection(this.tableName).find(filter, mongoOpts).toArray()
+        .then(docs => docs.map(d => { const { _id, ...rest } = d; return { id: _id?.toString(), ...rest } }))
+    }
     let sql = `SELECT * FROM ${this.tableName}`
     const params = [], conditions = []
     if (this.softDelete) conditions.push('deleted_at IS NULL')
@@ -684,6 +828,11 @@ class Model {
       if (!row.updated_at) row.updated_at = now()
     }
     const keys = Object.keys(row), vals = Object.values(row)
+    // MongoDB: usar insertOne
+    if (_useMongo) {
+      _mongoDB.collection(this.tableName).insertOne({ ...row }).catch(e => console.debug('[aiplang:mongo]', e?.message))
+      return row
+    }
     dbRun(`INSERT INTO ${this.tableName} (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`, vals)
     emit(`${this.modelName}.created`, row)
     return row
@@ -767,13 +916,39 @@ class Model {
 // MIGRATION
 // ═══════════════════════════════════════════════════════════════════
 function migrateModels(models) {
+  // ── Seleção de mapa de tipos por banco ───────────────────────────
+  const _sqliteTypes = { uuid:'TEXT',int:'INTEGER',integer:'INTEGER',float:'REAL',bool:'INTEGER',timestamp:'TEXT',date:'TEXT',json:'TEXT',enum:'TEXT',text:'TEXT',email:'TEXT',url:'TEXT',phone:'TEXT' }
+  const _mysqlTypes  = { uuid:'VARCHAR(36)',int:'INT',integer:'INT',float:'DOUBLE',bool:'TINYINT(1)',timestamp:'DATETIME',date:'DATE',json:'JSON',enum:'TEXT',text:'TEXT',email:'VARCHAR(255)',url:'TEXT',phone:'VARCHAR(20)' }
+  const _pgTypes     = { uuid:'UUID',int:'INTEGER',integer:'INTEGER',float:'DOUBLE PRECISION',bool:'BOOLEAN',timestamp:'TIMESTAMPTZ',date:'DATE',json:'JSONB',enum:'TEXT',text:'TEXT',email:'TEXT',url:'TEXT',phone:'TEXT' }
+  const typeMap = _mysqlPool ? _mysqlTypes : (_pgPool ? _pgTypes : _sqliteTypes)
+
   for (const model of models) {
     const table = toTable(model.name)
+
+    // ── MongoDB: criar collection com índices ──────────────────────
+    if (_useMongo) {
+      _mongoDB.collection(table)  // cria collection implicitamente
+      for (const f of model.fields) {
+        const colName = toCol(f.name)
+        if (f.modifiers.includes('unique')) {
+          _mongoDB.collection(table).createIndex({ [colName]: 1 }, { unique: true }).catch(() => {})
+        }
+      }
+      console.log(`[aiplang] ✓  ${table}  (MongoDB)`)
+      continue
+    }
+
     const cols = []
     for (const f of model.fields) {
-      let sqlType = { uuid:'TEXT',int:'INTEGER',integer:'INTEGER',float:'REAL',bool:'INTEGER',timestamp:'TEXT',date:'TEXT',json:'TEXT',enum:'TEXT',text:'TEXT',email:'TEXT',url:'TEXT',phone:'TEXT' }[f.type] || 'TEXT'
+      let sqlType = typeMap[f.type] || 'TEXT'
       let def = `${toCol(f.name)} ${sqlType}`
-      if (f.modifiers.includes('pk')) def += ' PRIMARY KEY'
+      if (f.modifiers.includes('pk')) {
+        if (_mysqlPool) def += ' PRIMARY KEY'
+        else def += ' PRIMARY KEY'
+      }
+      if (f.modifiers.includes('auto') && f.type !== 'uuid') {
+        if (_mysqlPool) def += ' AUTO_INCREMENT'
+      }
       if (f.modifiers.includes('required')) def += ' NOT NULL'
       if (f.modifiers.includes('unique')) def += ' UNIQUE'
       if (f.default !== null) def += ` DEFAULT '${f.default}'`
@@ -905,7 +1080,18 @@ function parseApp(src) {
 }
 
 function parseEnvLine(s) { const p=s.split(/\s+/); const ev={name:'',required:false,default:null}; for(const x of p){if(x==='required')ev.required=true;else if(x.includes('=')){const[k,v]=x.split('=');ev.name=k;ev.default=v}else ev.name=x}; return ev }
-function parseDBLine(s) { const p=s.split(/\s+/); const d=p[0]||'sqlite'; return{driver:d==='pg'||d==='psql'?'postgres':d,dsn:p[1]||'./app.db'} }
+function parseDBLine(s) {
+  const p = s.split(/\s+/)
+  let d = (p[0]||'sqlite').toLowerCase()
+  // Normalizar aliases
+  if (d==='pg'||d==='psql'||d==='postgresql') d='postgres'
+  if (d==='mariadb') d='mysql'
+  if (d==='mongo') d='mongodb'
+  if (d==='redis'||d==='cache') d='redis'
+  if (d==='sqlite3') d='sqlite'
+  const dsn = p[1] || (d==='sqlite'?'./app.db':d==='redis'?'redis://localhost:6379':'')
+  return { driver:d, dsn }
+}
 function parseAuthLine(s) { const p=s.split(/\s+/); const a={provider:'jwt',secret:p[1]||'$JWT_SECRET',expire:'7d',refresh:'30d'}; for(const x of p){if(x.startsWith('expire='))a.expire=x.slice(7);if(x.startsWith('refresh='))a.refresh=x.slice(8);if(x==='google')a.oauth=['google'];if(x==='github')a.oauth=[...(a.oauth||[]),'google']}; return a }
 function parseMailLine(s) { const parts=s.split(/\s+/); const m={driver:parts[0]||'smtp'}; for(const x of parts.slice(1)){const[k,v]=x.split('='); m[k]=v}; return m }
 function parseStripeLine(s) {
@@ -2246,7 +2432,7 @@ async function startServer(aipFile, port = 3000) {
   })
 
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.11.3',
+    status:'ok', version:'2.11.4',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

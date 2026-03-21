@@ -1806,6 +1806,25 @@ class AiplangServer {
       if (this._requestLogger) this._requestLogger(req, Date.now() - _start)
       return
     }
+    // Servir arquivos estaticos /public/*
+    const _sext = req.path && req.path.match(/\.([a-zA-Z0-9]+)$/)
+    if (_sext && req.method === 'GET') {
+      const _appDir = server && server._appDir ? server._appDir : process.cwd()
+      const _cands = [
+        require('path').join(_appDir,'public',req.path),
+        require('path').join(process.cwd(),'public',req.path),
+        require('path').join(_appDir,req.path.slice(1)),
+      ]
+      for (const _fp of _cands) {
+        if (require('fs').existsSync(_fp)) {
+          const _mime = getMimeType(_fp)
+          const _buf  = require('fs').readFileSync(_fp)
+          res.setHeader('Cache-Control','public,max-age=86400')
+          res.writeHead(200,{'Content-Type':_mime,'Content-Length':_buf.length})
+          return res.end(_buf)
+        }
+      }
+    }
     const _404b='{"error":"Not found"}'; res.writeHead(404,{'Content-Type':'application/json','Content-Length':18}); res.end(_404b)
   }
 
@@ -2137,6 +2156,17 @@ function getMime(filename) {
   return types[ext] || 'application/octet-stream'
 }
 
+// Cache-Control helper
+function _cacheHeaders(res, type, maxAge=0) {
+  if (type && (type.startsWith('image/') || type.startsWith('font/') || type.endsWith('javascript') || type.endsWith('css'))) {
+    res.setHeader('Cache-Control', `public, max-age=${maxAge||86400}, immutable`)
+  } else if (type && type.includes('html')) {
+    res.setHeader('Cache-Control', 'no-cache')
+  } else {
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // PLUGIN SYSTEM — ~plugin ./my-plugin.js | ~use rate-limit max=100
 // ═══════════════════════════════════════════════════════════════════
@@ -2387,7 +2417,7 @@ async function startServer(aipFile, port = 3000) {
   // Static assets
   srv.addRoute('GET', '/aiplang-hydrate.js', (req, res) => {
     const p = path.join(__dirname, '..', 'runtime', 'aiplang-hydrate.js')
-    if (fs.existsSync(p)) { res.writeHead(200,{'Content-Type':'application/javascript'}); res.end(fs.readFileSync(p)) }
+    if (fs.existsSync(p)) { res.setHeader('Cache-Control','public,max-age=86400'); res.writeHead(200,{'Content-Type':'application/javascript'}); res.end(fs.readFileSync(p)) }
     else { res.writeHead(404); res.end('// not found') }
   })
 
@@ -2432,7 +2462,7 @@ async function startServer(aipFile, port = 3000) {
   })
 
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.11.10',
+    status:'ok', version:'2.11.11',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

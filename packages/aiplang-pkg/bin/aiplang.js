@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.11.10'
+const VERSION     = '2.11.11'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -686,7 +686,7 @@ function generateTypes(app, srcFile) {
   }
 
   lines.push(`// ── aiplang version ──────────────────────────────────────────`)
-  lines.push(`export const AIPLANG_VERSION     = '2.11.10'`)
+  lines.push(`export const AIPLANG_VERSION     = '2.11.11'`)
   lines.push(``)
   return lines.join('\n')
 }
@@ -936,7 +936,18 @@ console.error(`\n  ✗  Unknown command: ${cmd}\n  Run aiplang --help\n`)
 process.exit(1)
 
 function parsePages(src) {
-  return src.split(/\n---\n/).map(s=>parsePage(s.trim())).filter(Boolean)
+  // Extrair variáveis globais ~var name = value
+  const gVars = {}
+  src.split('\n').forEach(line => {
+    const vm = line.trim().match(/^~var\s+(\w+)\s*=\s*(.+)$/)
+    if (vm) gVars[vm[1].trim()] = vm[2].trim().replace(/^["']|["']$/g,'')
+  })
+  // Expandir $var em todo o src
+  function expand(s) {
+    if (!Object.keys(gVars).length) return s
+    return s.replace(/\$(\w+)/g, (m,k) => gVars[k]!==undefined ? gVars[k] : m)
+  }
+  return src.split(/\n---\n/).map(s=>parsePage(expand(s.trim()))).filter(Boolean)
 }
 
 function parsePage(src) {
@@ -944,6 +955,7 @@ function parsePage(src) {
   if(!lines.length) return null
   const p={id:'page',theme:'dark',route:'/',customTheme:null,themeVars:null,state:{},queries:[],blocks:[]}
   for(const line of lines) {
+    if(line.startsWith('~var ')) continue  // já processado globalmente
     if(line.startsWith('%')) {
       const pts=line.slice(1).trim().split(/\s+/)
       p.id=pts[0]||'page'; p.route=pts[2]||'/'
@@ -1206,6 +1218,18 @@ function applyMods(html, b) {
 
 function renderPage(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','list','form','if','btn','select','faq'].includes(b.kind))
+  // Expandir variáveis $var no conteúdo da página
+  const _vars = (page.appVars||{})
+  function expandVars(s) {
+    if (!s || typeof s !== 'string' || !Object.keys(_vars).length) return s
+    return s.replace(/\$(\w+)/g, (m, k) => _vars[k] !== undefined ? _vars[k] : m)
+  }
+  // Pré-processar rawLine de cada bloco
+  page.blocks.forEach(b => {
+    if (b.rawLine) b.rawLine = expandVars(b.rawLine)
+    if (b.title) b.title = expandVars(b.title)
+    if (b.sub) b.sub = expandVars(b.sub)
+  })
   const body=page.blocks.map(b=>{try{return applyMods(renderBlock(b,page),b)}catch(e){console.error('[aiplang] Block render error:',b.kind,e.message);return ''}}).join('')
 
   const tableBlocks = page.blocks.filter(b => b.kind === 'table' && b.binding && b.cols && b.cols.length)
@@ -1260,8 +1284,12 @@ function renderPage(page, allPages) {
 <meta name="description" content="${esc((()=>{const h=page.blocks.find(b=>b.kind==='hero');if(!h)return '';const m=h.rawLine&&h.rawLine.match(/\{([^}]+)\}/);if(!m)return '';const p=m[1].split('>');const s=p[0].split('|')[1];return s?s.trim():''})())}">
 <meta property="og:title" content="${_title}">
 <meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <meta property="og:type" content="website">
-<style>${css(page.theme)}${customVars}${themeVarCSS}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<style>${minCSS(css(page.theme)+customVars+themeVarCSS)}</style>
 </head>
 <body>
 ${body}${hydrate}
@@ -1862,6 +1890,16 @@ function genThemeVarCSS(t) {
 }
 
 
+function minCSS(s) {
+  if(!s) return ''
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g,'')
+    .replace(/\s*([{};:,>~+|])\s*/g,'$1')
+    .replace(/\s+/g,' ')
+    .replace(/;}/g,'}')
+    .trim()
+}
+
 function css(theme) {
   // ════════════════════════════════════════════════════════════════
   // GEIST DESIGN SYSTEM — Vercel's design language for aiplang
@@ -1869,7 +1907,7 @@ function css(theme) {
   // Fonts: Geist Sans + Geist Mono (Google Fonts)
   // ════════════════════════════════════════════════════════════════
   const base = `
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;700&display=swap&display=swap');
 
 :root {
   --geist-font:'Geist','Geist Sans',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;

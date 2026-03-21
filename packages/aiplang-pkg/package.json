@@ -1,6 +1,6 @@
 {
   "name": "aiplang",
-  "version": "2.11.9",
+  "version": "2.11.10",
   "description": "AI-first web language. One .aip file = complete app. Frontend + backend + database + auth.",
   "keywords": [
     "aiplang",

@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.11.9'
+const VERSION     = '2.11.10'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -686,7 +686,7 @@ function generateTypes(app, srcFile) {
   }
 
   lines.push(`// ── aiplang version ──────────────────────────────────────────`)
-  lines.push(`export const AIPLANG_VERSION     = '2.11.9'`)
+  lines.push(`export const AIPLANG_VERSION     = '2.11.10'`)
   lines.push(``)
   return lines.join('\n')
 }
@@ -1049,6 +1049,12 @@ function parseBlock(line) {
   if(line.startsWith('steps{'))      { const m=line.match(/^steps\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'steps',items:m[1].split('|').map(it=>{const p=it.trim().split('>');return{num:p[0]?.trim(),title:p[1]?.trim(),desc:p[2]?.trim()}}),variant:vm?.[1]}} }
   if(line.startsWith('compare{'))    { const m=line.match(/^compare\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'compare',rows:m[1].split('|').map(r=>r.trim().split(':').map(c=>c.trim())),variant:vm?.[1]}} }
   if(line.startsWith('video{'))      { const m=line.match(/^video\{([^}]*)\}/);if(m){const pts=m[1].split('|');return{kind:'video',url:pts[0]?.trim(),poster:pts[1]?.trim()}} }
+  if(line.startsWith('bento{'))     {
+    const m=line.match(/^bento\{([^}]*)\}/)
+    if(m){const vm=line.match(/variant:(\S+)/);const am=line.match(/animate:(\S+)/)
+      const items=m[1].split('|').map(function(it){const p=it.trim().split('>');return{title:p[0]&&p[0].trim(),desc:p[1]&&p[1].trim(),icon:p[2]&&p[2].trim(),link:p[3]&&p[3].trim()}})
+      return{kind:'bento',items:items,variant:vm&&vm[1],animate:am&&am[1]}}
+  }
   if(line.startsWith('faq{')) {
     const body=line.slice(4,line.lastIndexOf('}')).trim()
     const items=body.split('|').map(i=>{const idx=i.indexOf('>');return{q:i.slice(0,idx).trim(),a:i.slice(idx+1).trim()}}).filter(i=>i.q&&i.a)
@@ -1288,6 +1294,7 @@ function renderBlock(b, page) {
     case 'compare':     return rCompare(b)
     case 'video':       return rVideo(b)
     case 'gallery':     return rGallery(b)
+    case 'bento':       return rBento(b)
     case 'raw':         return (b.html||'')+'\n'
     case 'html':        return `<div class="fx-html">${b.content||''}</div>\n`
     case 'spacer':      return `<div class="fx-spacer" style="height:${esc(b.height||'2rem')}"></div>\n`
@@ -1417,8 +1424,11 @@ function rHero(b) {
     else if(f.isLink) ctas+=`<a href="${esc(f.path)}" class="fx-cta">${esc(f.label)}</a>`
     else if(!h1) {
       // *texto* entre asteriscos = gradient text
-      const gt = f.text.match(/^\*(.*?)\*$/)
-      if(gt) h1=`<h1 class="fx-title"><span class="fx-gradient-text">${esc(gt[1])}</span></h1>`
+      const gt = f.text.match(/^\*(.*?)\*(:warm|:ocean|:purple)?$/)
+      if(gt) {
+        const gradClass = gt[2]=== ':warm' ? 'fx-gradient-text-warm' : gt[2]===':ocean' ? 'fx-gradient-text-ocean' : gt[2]===':purple' ? 'fx-gradient-text-purple' : 'fx-gradient-text'
+        h1=`<h1 class="fx-title"><span class="${gradClass}">${esc(gt[1])}</span></h1>`
+      }
       else h1=`<h1 class="fx-title">${esc(f.text)}</h1>`
     }
     else sub+=`<p class="fx-sub">${esc(f.text)}</p>`
@@ -1428,6 +1438,17 @@ function rHero(b) {
   const inlineStyle = b.style && !b.bg ? ` style="${b.style.replace(/,/g,';')}"` : ''
   if (v === 'landing') {
     return `<section class="fx-hero fx-hero-landing"${bgStyle}><div class="fx-hero-grid"></div><div class="fx-hero-inner">${h1}${sub}${ctas}</div></section>
+`
+  }
+  if (v === 'mesh') {
+    // Lovable-style warm gradient blobs
+    const meshStyle = b.style ? ` style="${b.style.replace(/,/g,';')}"` : ''
+    return `<section class="fx-hero fx-hero-mesh"${bgStyle}${meshStyle}>
+  <div class="fx-mesh-blob"></div>
+  <div class="fx-mesh-blob"></div>
+  <div class="fx-mesh-blob"></div>
+  <div class="fx-hero-inner">${h1}${sub}${ctas}</div>
+</section>
 `
   }
   if (h1) h1 = heroBadge + h1
@@ -1481,8 +1502,11 @@ function rRow(b) {
       if(fi===1) return`<h3 class="fx-card-title">${esc(f.text)}</h3>`
       return`<p class="fx-card-body">${esc(f.text)}</p>`
     }).join('')
+    let extraClass=''
+    if(b.variant==='glass'||b.variant==='glassmorphism') extraClass=' fx-card-glass'
+    if(b.variant==='shine') extraClass=' fx-card-shine'
     const bgStyle=b.bg?` style="background:${b.bg}"`:(b.variant==='bordered'?` style="border:1px solid var(--accent,#2563eb)22"`:colorStyle)
-    return`<div class="fx-card"${bgStyle}>${inner}</div>`
+    return`<div class="fx-card${extraClass}"${bgStyle}>${inner}</div>`
   }).join('')
   const v=b.variant||''
   const wrapStyle=b.style?` style="${b.style.replace(/,/g,';')}"`:''
@@ -1585,6 +1609,28 @@ function rStatsUpgraded(b) {
 
 
 
+
+// ── rBento: Lovable-style bento grid ─────────────────────────────
+function rBento(b) {
+  const v = b.variant||'default'
+  const glassClass = v==='glass' ? ' fx-bento-glass' : ''
+  const cards = (b.items||[]).map(function(item, i) {
+    const large = i===0 && (b.items||[]).length>=4
+    const icon = item.icon ? '<div class="fx-bento-icon">'+esc(item.icon)+'</div>' : ''
+    const title = item.title ? '<div class="fx-bento-title">'+esc(item.title)+'</div>' : ''
+    const desc = item.desc ? '<div class="fx-bento-desc">'+esc(item.desc)+'</div>' : ''
+    let link = ''
+    if(item.link) {
+      const lparts = item.link.split(':'); const lhref=lparts[0]; const llabel=lparts.slice(1).join(':')||item.link
+      link = '<a href="'+esc(lhref)+'" class="fx-bento-link">'+esc(llabel)+' →</a>'
+    }
+    const largeClass = large ? ' fx-bento-large' : ''
+    const shineClass = v==='shine' ? ' fx-card-shine' : ''
+    return '<div class="fx-bento-card'+glassClass+largeClass+shineClass+'">'+icon+'<div class="fx-bento-body">'+title+desc+link+'</div></div>'
+  }).join('')
+  const animC = b.animate==='stagger'?' fx-animate-stagger':b.animate?' fx-animate':''
+  return '<div class="fx-bento'+animC+'">'+cards+'</div>\n'
+}
 // ── rMarquee: faixa de logos/texto em loop infinito ───────────────
 function rMarquee(b) {
   const speed = b.variant === 'fast' ? '15s' : b.variant === 'slow' ? '40s' : '25s'
@@ -2570,6 +2616,70 @@ textarea.fx-input{height:auto;padding:10px 12px;resize:vertical;min-height:80px;
 .fx-footer-note{font-size:12px;color:var(--ds-gray-600);font-family:var(--geist-mono)}
 .fx-footer-text{font-size:13px;color:var(--ds-gray-700)}
 @media(max-width:640px){.fx-footer{padding:24px}.fx-footer-inner{flex-direction:column;align-items:flex-start;gap:12px}}
+
+/* ══════════════════════════════════════════
+   BENTO GRID — Lovable-style irregular grid
+══════════════════════════════════════════ */
+.fx-bento{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:min-content;gap:12px;padding:0 40px 80px}
+@media(max-width:900px){.fx-bento{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.fx-bento{grid-template-columns:1fr;padding:0 24px 48px}}
+.fx-bento-card{border-radius:var(--radius-lg);padding:28px;background:var(--ds-background-200);border:1px solid var(--ds-gray-alpha-400);display:flex;flex-direction:column;gap:12px;transition:border-color var(--duration-normal) var(--ease-in-out),transform var(--duration-slow) var(--ease-out);position:relative;overflow:hidden;min-height:160px}
+.fx-bento-card:hover{border-color:var(--ds-gray-alpha-700);transform:translateY(-2px)}
+.fx-bento-card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(var(--aip-accent-rgb),.4),transparent);opacity:0;transition:opacity .3s}
+.fx-bento-card:hover::before{opacity:1}
+.fx-bento-large{grid-column:span 2;min-height:220px}
+@media(max-width:600px){.fx-bento-large{grid-column:span 1}}
+.fx-bento-glass{background:rgba(255,255,255,.04)!important;backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border:1px solid rgba(255,255,255,.1)!important;box-shadow:0 4px 24px rgba(0,0,0,.2)}
+.fx-bento-glass:hover{background:rgba(255,255,255,.07)!important;border-color:rgba(255,255,255,.2)!important}
+.fx-bento-icon{font-size:28px;line-height:1;margin-bottom:4px}
+.fx-bento-body{display:flex;flex-direction:column;gap:8px;flex:1}
+.fx-bento-title{font-size:15px;font-weight:700;letter-spacing:-.025em;color:var(--ds-gray-1000);line-height:1.3}
+.fx-bento-desc{font-size:13px;line-height:1.6;color:var(--ds-gray-900)}
+.fx-bento-link{font-size:12px;font-weight:600;color:var(--ds-blue-700);margin-top:auto;padding-top:8px}
+
+/* ══════════════════════════════════════════
+   GLASSMORPHISM — cards e hero
+══════════════════════════════════════════ */
+.fx-card-glass{background:rgba(255,255,255,.04)!important;backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border:1px solid rgba(255,255,255,.1)!important;box-shadow:0 8px 32px rgba(0,0,0,.25)}
+.fx-card-glass:hover{background:rgba(255,255,255,.07)!important;transform:translateY(-3px);box-shadow:0 12px 48px rgba(0,0,0,.35)}
+
+/* ══════════════════════════════════════════
+   MESH GRADIENT — Lovable-style blobs animados
+══════════════════════════════════════════ */
+.fx-hero-mesh{overflow:hidden}
+.fx-mesh-blob{position:absolute;pointer-events:none;border-radius:50%;filter:blur(80px);animation:fx-blob-float 12s ease-in-out infinite}
+.fx-mesh-blob:nth-child(1){width:600px;height:500px;left:-100px;top:-100px;animation-delay:0s;background:radial-gradient(circle,rgba(var(--mesh-c1,99,102,241),.35),transparent 70%)}
+.fx-mesh-blob:nth-child(2){width:500px;height:400px;right:-100px;top:100px;animation-delay:-4s;background:radial-gradient(circle,rgba(var(--mesh-c2,236,72,153),.25),transparent 70%)}
+.fx-mesh-blob:nth-child(3){width:400px;height:400px;left:30%;bottom:-100px;animation-delay:-8s;background:radial-gradient(circle,rgba(var(--mesh-c3,251,146,60),.2),transparent 70%)}
+@keyframes fx-blob-float{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(30px,-30px) scale(1.05)}66%{transform:translate(-20px,20px) scale(.97)}}
+
+/* ══════════════════════════════════════════
+   ANIMATED GRADIENT BUTTON — Vercel style
+══════════════════════════════════════════ */
+.fx-cta-glow-btn{position:relative;border-radius:var(--radius-md);padding:2px;background:linear-gradient(-90deg,#007cf0,#00dfd8,rgba(var(--aip-accent-rgb),1),#007cf0);background-size:400% 100%;animation:fx-grad-btn 8s ease-in-out infinite;display:inline-block}
+@keyframes fx-grad-btn{50%{background-position:140% 50%}}
+.fx-cta-glow-btn-inner{display:block;height:38px;padding:0 20px;line-height:38px;background:var(--ds-background-100);border-radius:calc(var(--radius-md) - 2px);font-size:14px;font-weight:600;color:var(--ds-gray-1000);transition:background var(--duration-normal);white-space:nowrap}
+.fx-cta-glow-btn:hover .fx-cta-glow-btn-inner{background:var(--ds-background-200)}
+
+/* ══════════════════════════════════════════
+   GRADIENT TEXT VARIANTS — Lovable paletas
+══════════════════════════════════════════ */
+.fx-gradient-text-warm{background:linear-gradient(135deg,#6366f1,#ec4899,#f97316);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.fx-gradient-text-ocean{background:linear-gradient(135deg,#06b6d4,#3b82f6,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.fx-gradient-text-purple{background:linear-gradient(135deg,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+
+/* ══════════════════════════════════════════
+   FLOATING ANIMATION — micro-interaction
+══════════════════════════════════════════ */
+.fx-float{animation:fx-floating 4s ease-in-out infinite}
+.fx-float-2{animation:fx-floating 5s ease-in-out infinite;animation-delay:-1.5s}
+.fx-float-3{animation:fx-floating 6s ease-in-out infinite;animation-delay:-3s}
+@keyframes fx-floating{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+
+/* Shine sweep nos cards */
+.fx-card-shine{overflow:hidden}
+.fx-card-shine::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,transparent 30%,rgba(255,255,255,.04) 50%,transparent 70%);transform:translateX(-100%);transition:transform .6s var(--ease-out);pointer-events:none}
+.fx-card-shine:hover::after{transform:translateX(100%)}
 `
 
   // ════════════════════════════════════════════════════════════════
@@ -2613,6 +2723,54 @@ textarea.fx-input{height:auto;padding:10px 12px;resize:vertical;min-height:80px;
   --ds-red-700:#ff0000;
   --ds-green-100:rgba(0,188,112,.08);
   --ds-green-700:#00bc70;
+}`,
+    warm: `
+:root{
+  --ds-background-100:#0a0010;--ds-background-100-rgb:10,0,16;--ds-background-200:#110018;
+  --ds-gray-100:#110018;--ds-gray-200:#1a0025;--ds-gray-300:#250032;--ds-gray-400:#2e0040;
+  --ds-gray-600:#9d6cb5;--ds-gray-700:#b87fd4;--ds-gray-800:#c896e8;--ds-gray-900:#d4aef0;--ds-gray-1000:#f0e0ff;
+  --ds-gray-alpha-100:rgba(200,100,255,.04);--ds-gray-alpha-200:rgba(200,100,255,.07);
+  --ds-gray-alpha-400:rgba(200,100,255,.12);--ds-gray-alpha-700:rgba(200,100,255,.22);
+  --ds-blue-700:#a78bfa;--ds-blue-rgb:167,139,250;
+  --ds-green-700:#4ade80;--ds-red-700:#f87171;
+  --aip-accent:#ec4899;--aip-accent-rgb:236,72,153;
+  --mesh-c1:99,102,241;--mesh-c2:236,72,153;--mesh-c3:251,146,60;
+}`,
+    ocean: `
+:root{
+  --ds-background-100:#00080f;--ds-background-100-rgb:0,8,15;--ds-background-200:#000d18;
+  --ds-gray-100:#000d18;--ds-gray-200:#001524;--ds-gray-300:#001d30;--ds-gray-400:#00253e;
+  --ds-gray-600:#4a8fab;--ds-gray-700:#5ba8c8;--ds-gray-800:#70bfe0;--ds-gray-900:#8dd0f0;--ds-gray-1000:#d0efff;
+  --ds-gray-alpha-100:rgba(100,200,255,.04);--ds-gray-alpha-200:rgba(100,200,255,.07);
+  --ds-gray-alpha-400:rgba(100,200,255,.12);--ds-gray-alpha-700:rgba(100,200,255,.22);
+  --ds-blue-700:#38bdf8;--ds-blue-rgb:56,189,248;
+  --ds-green-700:#34d399;--ds-red-700:#f87171;
+  --aip-accent:#0ea5e9;--aip-accent-rgb:14,165,233;
+  --mesh-c1:6,182,212;--mesh-c2:59,130,246;--mesh-c3:139,92,246;
+}`,
+    purple: `
+:root{
+  --ds-background-100:#05000f;--ds-background-100-rgb:5,0,15;--ds-background-200:#0a0018;
+  --ds-gray-100:#0a0018;--ds-gray-200:#120022;--ds-gray-300:#1a002e;--ds-gray-400:#22003c;
+  --ds-gray-600:#7c5caf;--ds-gray-700:#9b72d8;--ds-gray-800:#b38ef5;--ds-gray-900:#c9a8ff;--ds-gray-1000:#eddeff;
+  --ds-gray-alpha-100:rgba(180,130,255,.04);--ds-gray-alpha-200:rgba(180,130,255,.07);
+  --ds-gray-alpha-400:rgba(180,130,255,.12);--ds-gray-alpha-700:rgba(180,130,255,.22);
+  --ds-blue-700:#a78bfa;--ds-blue-rgb:167,139,250;
+  --ds-green-700:#4ade80;--ds-red-700:#f87171;
+  --aip-accent:#8b5cf6;--aip-accent-rgb:139,92,246;
+  --mesh-c1:139,92,246;--mesh-c2:236,72,153;--mesh-c3:99,102,241;
+}`,
+    midnight: `
+:root{
+  --ds-background-100:#010309;--ds-background-100-rgb:1,3,9;--ds-background-200:#030610;
+  --ds-gray-100:#060c1a;--ds-gray-200:#0d1629;--ds-gray-300:#152033;--ds-gray-400:#1c2a3e;
+  --ds-gray-600:#4c6480;--ds-gray-700:#6580a0;--ds-gray-800:#7d98bc;--ds-gray-900:#a0b4d0;--ds-gray-1000:#d8e8f8;
+  --ds-gray-alpha-100:rgba(100,160,220,.04);--ds-gray-alpha-200:rgba(100,160,220,.07);
+  --ds-gray-alpha-400:rgba(100,160,220,.12);--ds-gray-alpha-700:rgba(100,160,220,.22);
+  --ds-blue-700:#60a5fa;--ds-blue-rgb:96,165,250;
+  --ds-green-700:#4ade80;--ds-red-700:#f87171;
+  --aip-accent:#3b82f6;--aip-accent-rgb:59,130,246;
+  --mesh-c1:59,130,246;--mesh-c2:99,102,241;--mesh-c3:14,165,233;
 }`,
     light: `
 :root {

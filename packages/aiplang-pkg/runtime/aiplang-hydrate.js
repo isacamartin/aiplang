@@ -6,23 +6,20 @@
 const cfg = window.__AIPLANG_PAGE__
 if (!cfg) return
 
-// ── Global Store — cross-page state (like React Context / Zustand) ─
 const _STORE_KEY = 'aiplang_store_v1'
 const _globalStore = (() => {
   try { return JSON.parse(sessionStorage.getItem(_STORE_KEY) || '{}') } catch { return {} }
 })()
 function syncStore(key, value) {
   _globalStore[key] = value
-  try { sessionStorage.setItem(_STORE_KEY, JSON.stringify(_globalStore)) } catch {}
-  try { new BroadcastChannel(_STORE_KEY).postMessage({ key, value }) } catch {}
+  try { sessionStorage.setItem(_STORE_KEY, JSON.stringify(_globalStore)) } catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
+  try { new BroadcastChannel(_STORE_KEY).postMessage({ key, value }) } catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
 }
 
-// ── Page-level State ─────────────────────────────────────────────
 const _state = {}
 const _watchers = {}
 const _storeKeys = new Set((cfg.stores || []).map(s => s.key))
 
-// Bootstrap state: SSR data > global store > page state declarations
 const _boot = { ...(window.__SSR_DATA__ || {}), ..._globalStore }
 for (const [k, v] of Object.entries({ ...(cfg.state || {}), ..._boot })) {
   try { _state[k] = typeof v === 'string' && (v.startsWith('[') || v.startsWith('{') || v === 'true' || v === 'false' || !isNaN(v)) ? JSON.parse(v) : v } catch { _state[k] = v }
@@ -31,14 +28,14 @@ for (const [k, v] of Object.entries({ ...(cfg.state || {}), ..._boot })) {
 function get(key) { return _state[key] }
 
 function set(key, value, _persist) {
-  // Fast equality check: primitives first (avoid JSON.stringify for numbers/strings)
+
   const old = _state[key]
   if (old === value) return
   if (typeof value !== 'object' && old === value) return
   if (typeof value === 'object' && value !== null && typeof old === 'object' && old !== null) {
-    // Only deep check for objects/arrays — skip if different length (fast exit)
+
     if (Array.isArray(value) && Array.isArray(old) && value.length !== old.length) {
-      // Different length — definitely changed
+
     } else if (JSON.stringify(old) === JSON.stringify(value)) return
   }
   _state[key] = value
@@ -46,13 +43,12 @@ function set(key, value, _persist) {
   notify(key)
 }
 
-// Cross-tab store sync (other pages update when store changes)
 try {
   const _bc = new BroadcastChannel(_STORE_KEY)
   _bc.onmessage = ({ data: { key, value } }) => {
     _state[key] = value; notify(key)
   }
-} catch {}
+} catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
 
 function watch(key, cb) {
   if (!_watchers[key]) _watchers[key] = []
@@ -77,8 +73,7 @@ function notify(key) {
   _pending.add(key)
   if (!_batchScheduled) {
     _batchScheduled = true
-    // Use microtask (Promise.resolve) for data fetches — fires faster than rAF
-    // Use rAF for user interaction (avoids mid-frame layout thrash)
+
     Promise.resolve().then(() => {
       if (_batchScheduled) requestAnimationFrame(flushBatch)
     })
@@ -105,7 +100,6 @@ function resolvePath(tmpl, row) {
 
 const _intervals = []
 
-// Persistent session ID for delta tracking
 const _sid = Math.random().toString(36).slice(2)
 
 async function runQuery(q) {
@@ -119,13 +113,13 @@ async function runQuery(q) {
       'x-session-id': _sid
     }
   }
-  // Enable delta updates for GET requests after first load
+
   if (isGet && q._deltaReady) opts.headers['x-aiplang-delta'] = '1'
   if (q.body) opts.body = JSON.stringify(q.body)
   try {
     const res = await fetch(path, opts)
-    // 304 = nothing changed — skip re-render
-    if (res.status === 304) { q._deltaReady = true; return null }
+
+    if (res.status === 304) { q._deltaReady = true; return get(q.target?.replace(/^@/,'')) || null }
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const ct = res.headers.get('Content-Type') || ''
     let data
@@ -135,17 +129,17 @@ async function runQuery(q) {
     } else {
       data = await res.json()
     }
-    // Delta response: merge into existing state instead of replacing
+
     if (data && data.__delta) {
       const key = q.target ? q.target.replace(/^@/, '') : null
       if (key) {
         const current = [...(get(key) || [])]
-        // Apply changes
+
         for (const row of (data.changed || [])) {
           const idx = current.findIndex(r => r.id === row.id)
           if (idx >= 0) current[idx] = row; else current.push(row)
         }
-        // Remove deleted
+
         const delSet = new Set(data.deleted || [])
         const merged = current.filter(r => !delSet.has(r.id))
         set(key, merged)
@@ -188,7 +182,7 @@ function applyAction(data, target, action) {
           return true
         })
         set(fm[1], filtered)
-      } catch {}
+      } catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
       return
     }
     const am = action.match(/^@([a-zA-Z_]+)\s*=\s*\$result$/)
@@ -322,15 +316,12 @@ function hydrateTables() {
       }
     }
 
-    // ── Row cache for surgical DOM updates ──────────────────────────
-    // First render: full DocumentFragment build (fast)
-    // Re-renders: only update cells that actually changed
-    const _rowCache = new Map()  // id → {score, status, ..., tr element}
+    const _rowCache = new Map()
     const _colKeys = cols.map(c => c.key)
     let _initialized = false
 
     const renderRow = (row, idx) => {
-      // (defined above, used by virtual scroll too)
+
     }
 
     const render = () => {
@@ -338,7 +329,6 @@ function hydrateTables() {
       let rows   = get(key)
       if (!Array.isArray(rows)) rows = []
 
-      // Empty state
       if (!rows.length) {
         tbody.innerHTML = ''
         _rowCache.clear()
@@ -469,9 +459,8 @@ function hydrateTables() {
         tbody.appendChild(tr)
       }
 
-      // ── Surgical update vs full initial build ────────────────────
       if (!_initialized) {
-        // INITIAL: DocumentFragment for single layout pass
+
         _initialized = true
         tbody.innerHTML = ''
         const frag = document.createDocumentFragment()
@@ -487,7 +476,7 @@ function hydrateTables() {
             td.textContent = row[col.key] != null ? row[col.key] : ''
             tr.appendChild(td)
           }
-          // Action cells (edit + delete)
+
           if (editPath || delPath) {
             const actTd = document.createElement('td')
             actTd.className = 'fx-td fx-td-actions'
@@ -525,23 +514,19 @@ function hydrateTables() {
           frag.appendChild(tr)
         }
         tbody.appendChild(frag)
-        // Build compiled cache (Tier 1) + typed cache (Tier 2)
+
         try {
           const tc = _buildTypedCache(rows, _colKeys)
           _rowCache._typed = tc
-          // Compiled diff: use __aip_init_binding if available
+
           const compiledInit = window['__aip_init_' + stateKey]
           if (compiledInit) {
             _rowCache._compiled   = compiledInit(rows)
             _rowCache._compiled_n = rows.length
             _rowCache._ids        = rows.map(r => r.id != null ? r.id : null)
           }
-        } catch {}
+        } catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
       } else {
-        // UPDATE: off-main-thread diff + requestIdleCallback
-        // For 500+ rows: Worker computes diff on separate CPU core
-        // For <500 rows: sync diff (worker overhead not worth it)
-        // DOM patches always run on main thread but are minimal
 
         const _makeRow = (row, idx) => {
           const tr = document.createElement('tr')
@@ -579,10 +564,10 @@ function hydrateTables() {
         }
 
         if (rows.length >= 500) {
-          // Large: worker diff → idle callback apply (zero main thread impact)
+
           _diffAsync(rows, _colKeys, _rowCache).then(result => _schedIdle(() => _applyResult(result)))
         } else {
-          // Small: sync diff, immediate apply
+
           _applyResult(_diffSync(rows, _colKeys, _rowCache))
         }
       }
@@ -696,7 +681,7 @@ function hydrateBindings() {
   document.querySelectorAll('[data-fx-bind]').forEach(el => {
     const expr = el.getAttribute('data-fx-bind')
     const keys = (expr.match(/[@$][a-zA-Z_][a-zA-Z0-9_.]*/g) || []).map(m => m.slice(1).split('.')[0])
-    // Fast path: single key with simple path — direct textContent assignment
+
     const simpleM = expr.match(/^[@$]([a-zA-Z_][a-zA-Z0-9_.]*)$/)
     if (simpleM) {
       const path = simpleM[1].split('.')
@@ -874,25 +859,14 @@ function injectActionCSS() {
   document.head.appendChild(style)
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// OFF-MAIN-THREAD ENGINE — better than React Fiber
-// Fiber splits work across frames on the SAME thread.
-// This moves diff computation to a SEPARATE CPU core via Web Worker.
-// Main thread only handles tiny DOM patches — never competes with animations.
-// ═══════════════════════════════════════════════════════════════════
-
 const _workerSrc = `
 'use strict'
-// aiplang Diff Worker v2 — SharedArrayBuffer edition
-// Uses SAB when available (HTTPS + COOP/COEP headers)
-// Falls back to postMessage for unsupported environments
 
 let _sab = null, _sabView = null
 
 self.onmessage = function(e) {
   const { type, rows, colKeys, cache, reqId, sab } = e.data
 
-  // Accept SharedArrayBuffer reference
   if (sab) { _sab = sab; _sabView = new Int32Array(sab) }
 
   if (type !== 'diff') return
@@ -916,17 +890,16 @@ self.onmessage = function(e) {
     if (!seenIds.has(String(id)) && !seenIds.has(nid)) deletes.push(id)
   }
 
-  // Write to SharedArrayBuffer if available (zero-copy)
   if (_sabView && patches.length < 8000) {
     Atomics.store(_sabView, 0, patches.length)
     for (let i = 0; i < patches.length; i++) {
-      // Pack: patchIdx[i*3+0]=id_hash, [i*3+1]=col, [i*3+2]=encoded_val
+
       _sabView[1 + i*3]   = typeof patches[i].id === 'number' ? patches[i].id : patches[i].id.length
       _sabView[1 + i*3+1] = patches[i].col
-      _sabView[1 + i*3+2] = 0 // signal: read from patches array
+      _sabView[1 + i*3+2] = 0
     }
-    Atomics.store(_sabView, 0, patches.length | 0x80000000) // MSB = done flag
-    // Still send full patch data for non-numeric values
+    Atomics.store(_sabView, 0, patches.length | 0x80000000)
+
     self.postMessage({ type: 'patches', patches, inserts, deletes, reqId, usedSAB: true })
   } else {
     self.postMessage({ type: 'patches', patches, inserts, deletes, reqId, usedSAB: false })
@@ -937,7 +910,7 @@ self.onmessage = function(e) {
 let _diffWorker = null
 const _wCbs = new Map()
 let _wReq = 0
-let _wSAB = null // SharedArrayBuffer view for zero-copy transfers
+let _wSAB = null
 
 function _getWorker() {
   if (_diffWorker) return _diffWorker
@@ -948,12 +921,12 @@ function _getWorker() {
       if (cb) { cb(e.data); _wCbs.delete(e.data.reqId) }
     }
     _diffWorker.onerror = () => { _diffWorker = null }
-    // Share a buffer for high-frequency zero-copy patch transfer
+
     try {
-      const sab = new SharedArrayBuffer(8000 * 3 * 4 + 4) // 8k patches × 3 ints × 4 bytes + header
+      const sab = new SharedArrayBuffer(8000 * 3 * 4 + 4)
       _diffWorker.postMessage({ type: 'init_sab', sab }, [])
       _wSAB = new Int32Array(sab)
-    } catch {} // SAB not available (requires HTTPS + COOP headers)
+    } catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
   } catch { _diffWorker = null }
   return _diffWorker
 }
@@ -970,35 +943,30 @@ function _diffAsync(rows, colKeys, rowCache) {
   })
 }
 
-// ── TypedArray positional cache — beats Vue Vapor at all sizes ───
-// Float64Array for numeric fields, Uint8Array for status/enum
-// No Map.get in hot loop — pure positional array scan
-// Strategy: string-compare first for status (cheap), only encode int on change
-
 function _buildTypedCache(rows, colKeys) {
   const n = rows.length
   const isNum = colKeys.map(k => {
     const v = rows[0]?.[k]; return typeof v === 'number' || (v != null && !isNaN(Number(v)) && typeof v !== 'string')
   })
   const scores   = new Float64Array(n)
-  const statuses = new Uint8Array(n)  // status/enum col (first non-numeric)
-  const strCols  = []                  // which colKeys are strings
+  const statuses = new Uint8Array(n)
+  const strCols  = []
   colKeys.forEach((k,j) => {
     if (!isNum[j]) strCols.push(j)
   })
   rows.forEach((r,i) => {
-    // Numeric fields → Float64Array
+
     colKeys.forEach((k,j) => { if(isNum[j]) { const buf=j===0?scores:null; if(buf) buf[i]=Number(r[k])||0 } })
-    // Primary numeric col (usually score/value)
+
     const numIdx = colKeys.findIndex((_,j)=>isNum[j] && j>1)
     if(numIdx>=0) scores[i] = Number(rows[i][colKeys[numIdx]])||0
-    // Primary enum col
+
     const enumIdx = colKeys.findIndex((_,j)=>!isNum[j] && j>1)
     if(enumIdx>=0) statuses[i] = _STATUS_INT[rows[i][colKeys[enumIdx]]]??0
   })
   return {
     scores, statuses,
-    prevVals: colKeys.map(k => rows.map(r => r[k])), // string cache per column
+    prevVals: colKeys.map(k => rows.map(r => r[k])),
     isNum, colKeys, n,
     ids: rows.map(r => r.id)
   }
@@ -1008,14 +976,13 @@ function _diffSync(rows, colKeys, rowCache) {
   const patches = [], inserts = [], deletes = [], seen = new Set()
   const nCols = colKeys.length
 
-  // TIER 1 — COMPILED DIFF: use generated monomorphic function if available
-  // Generated at build time — specific field access, no generic loops
-  const compiledKey = stateKey  // table binding name
+  const compiledKey = stateKey
   const compiledInit = window['__aip_init_' + compiledKey]
   const compiledDiff = window['__aip_diff_' + compiledKey]
 
-  if (compiledDiff && rowCache._compiled && rows.length === rowCache._compiled_n) {
-    // Decode bitpacked patches: i<<4|colIdx
+  if (compiledDiff && rowCache._compiled && rows.length === rowCache._compiled_n
+      && rows.length > 0 && rowCache._ids?.length === rows.length) {
+
     const raw = compiledDiff(rows, rowCache._compiled)
     for (const pack of raw) {
       const i = pack >> 4, col = pack & 0xf
@@ -1029,7 +996,6 @@ function _diffSync(rows, colKeys, rowCache) {
     return { patches, inserts, deletes }
   }
 
-  // TIER 2 — TYPED CACHE fast path
   const tc = rowCache._typed
   if (tc && rows.length === tc.n) {
     for (let i = 0; i < rows.length; i++) {
@@ -1049,7 +1015,6 @@ function _diffSync(rows, colKeys, rowCache) {
     return { patches, inserts, deletes }
   }
 
-  // STANDARD PATH: Map-based diff (first render or variable-length data)
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i], id = r.id != null ? r.id : i
     seen.add(id)
@@ -1073,8 +1038,6 @@ function _diffSync(rows, colKeys, rowCache) {
   return { patches, inserts, deletes }
 }
 
-// requestIdleCallback scheduler — runs low-priority work when browser is idle
-// Polling updates (30s intervals) don't need to be urgent — let animations breathe
 const _idleQ = []
 let _idleSched = false
 const _ric = window.requestIdleCallback
@@ -1092,13 +1055,11 @@ function _schedIdle(fn) {
 function _flushIdle(dl) {
   _idleSched = false
   while (_idleQ.length && dl.timeRemaining() > 1) {
-    try { _idleQ.shift()() } catch {}
+    try { _idleQ.shift()() } catch(_e) { if(typeof console !== 'undefined') console.debug('[aiplang]',_e?.message) }
   }
   if (_idleQ.length) { _idleSched = true; _ric(_flushIdle, { timeout: 5000 }) }
 }
 
-// Incremental renderer — processes rows in chunks between animation frames
-// Zero dropped frames on 100k+ row datasets
 async function _renderIncremental(items, renderFn, chunkSize = 200) {
   for (let i = 0; i < items.length; i += chunkSize) {
     const chunk = items.slice(i, i + chunkSize)
@@ -1109,9 +1070,6 @@ async function _renderIncremental(items, renderFn, chunkSize = 200) {
   }
 }
 
-
-// ── Global reusable TypedArray buffers — zero allocation in hot path ──
-// Pre-allocated at startup, reused across every table render cycle
 const _MAX_ROWS   = 100000
 const _scoreBuf   = new Float64Array(_MAX_ROWS)
 const _statusBuf  = new Uint8Array(_MAX_ROWS)
@@ -1120,9 +1078,6 @@ const _STATUS_INT = {active:0,inactive:1,pending:2,blocked:3,
   pending:2,done:3,todo:0,doing:1,done:2,
   new:0,open:1,closed:2,resolved:3}
 
-// ── Minimal MessagePack decoder (~1.8KB) ─────────────────────────
-// Handles all types produced by aiplang server's msgpack encoder
-// No external dependencies — AI-maintained, human-unreadable by design
 const _mp = (() => {
   const td = new TextDecoder()
   function decode(buf) {
@@ -1131,11 +1086,11 @@ const _mp = (() => {
   }
   function _read(b, s) {
     const t = b[s.p++]
-    if (t <= 0x7f) return t                           // positive fixint
-    if (t >= 0xe0) return t - 256                     // negative fixint
-    if ((t & 0xe0) === 0xa0) return _str(b, s, t & 0x1f) // fixstr
-    if ((t & 0xf0) === 0x90) return _arr(b, s, t & 0xf)  // fixarray
-    if ((t & 0xf0) === 0x80) return _map(b, s, t & 0xf)  // fixmap
+    if (t <= 0x7f) return t
+    if (t >= 0xe0) return t - 256
+    if ((t & 0xe0) === 0xa0) return _str(b, s, t & 0x1f)
+    if ((t & 0xf0) === 0x90) return _arr(b, s, t & 0xf)
+    if ((t & 0xf0) === 0x80) return _map(b, s, t & 0xf)
     switch (t) {
       case 0xc0: return null
       case 0xc2: return false
@@ -1221,10 +1176,21 @@ function hydrateTableErrors() {
         if (val === '__error__') {
           if (tbody) {
             const cols = JSON.parse(tbl.getAttribute('data-fx-cols') || '[]')
-            tbody.innerHTML = `<tr><td colspan="${cols.length + 2}" class="fx-td-empty" style="color:#f87171">
-              ${fallback}
-              ${retryPath ? `<button onclick="window.__aiplang_retry('${binding}','${retryPath}')" style="margin-left:.75rem;padding:.3rem .75rem;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#f87171;border-radius:.375rem;cursor:pointer;font-size:.75rem">↻ Retry</button>` : ''}
-            </td></tr>`
+
+              tbody.innerHTML = ''
+              const _fe = (() => {
+                const tr=document.createElement('tr'), td=document.createElement('td')
+                td.colSpan=cols.length+2; td.className='fx-td-empty'; td.style.color='#f87171'
+                td.textContent=fallback
+                if(retryPath){
+                  const btn=document.createElement('button')
+                  btn.textContent='↻ Retry'; btn.style.cssText='margin-left:.75rem;padding:.3rem .75rem;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#f87171;border-radius:.375rem;cursor:pointer;font-size:.75rem'
+                  btn.onclick=()=>window.__aiplang_retry&&window.__aiplang_retry(binding,retryPath)
+                  td.appendChild(btn)
+                }
+                tr.appendChild(td); return tr
+              })()
+              tbody.appendChild(_fe)
           }
         }
       })

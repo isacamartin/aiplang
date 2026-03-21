@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.10.8'
+const VERSION     = '2.10.9'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -23,10 +23,6 @@ const esc   = s => s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;
 const ic    = n => ICONS[n] || n
 const isDyn = s => s&&(s.includes('@')||s.includes('$'))
 const hSize = n => n<1024?`${n}B`:`${(n/1024).toFixed(1)}KB`
-
-// ─────────────────────────────────────────────────────────────────
-// CLI COMMANDS
-// ─────────────────────────────────────────────────────────────────
 
 if (!cmd||cmd==='--help'||cmd==='-h') {
   console.log(`
@@ -74,18 +70,12 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
 }
 if (cmd==='--version'||cmd==='-v') { console.log(`aiplang v${VERSION}`); process.exit(0) }
 
-// ─────────────────────────────────────────────────────────────────
-// TEMPLATE SYSTEM
-// Custom templates stored at ~/.aip/templates/<name>.aip
-// ─────────────────────────────────────────────────────────────────
-
 const TEMPLATES_DIR = path.join(require('os').homedir(), '.aip', 'templates')
 
 function ensureTemplatesDir() {
   if (!fs.existsSync(TEMPLATES_DIR)) fs.mkdirSync(TEMPLATES_DIR, { recursive: true })
 }
 
-// Built-in templates (interpolate {{name}} and {{year}})
 const BUILTIN_TEMPLATES = {
   saas: `# {{name}}
 ~db sqlite ./app.db
@@ -255,24 +245,20 @@ function applyTemplateVars(src, name, year) {
 function getTemplate(tplName, name, year) {
   ensureTemplatesDir()
 
-  // 1. Local file path: --template ./my-template.aip or --template /abs/path.aip
   if (tplName.startsWith('./') || tplName.startsWith('../') || tplName.startsWith('/')) {
     const full = path.resolve(tplName)
     if (!fs.existsSync(full)) { console.error(`\n  ✗  Template file not found: ${full}\n`); process.exit(1) }
     return applyTemplateVars(fs.readFileSync(full, 'utf8'), name, year)
   }
 
-  // 2. User custom template: ~/.aip/templates/<name>.aip
   const customPath = path.join(TEMPLATES_DIR, tplName + '.aip')
   if (fs.existsSync(customPath)) {
     return applyTemplateVars(fs.readFileSync(customPath, 'utf8'), name, year)
   }
 
-  // 3. Built-in template
   const builtin = BUILTIN_TEMPLATES[tplName]
   if (builtin) return applyTemplateVars(builtin, name, year)
 
-  // Not found — show what's available
   const customs = fs.existsSync(TEMPLATES_DIR)
     ? fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.aip')).map(f=>f.replace('.aip',''))
     : []
@@ -297,17 +283,14 @@ function listTemplates() {
   console.log()
 }
 
-// ── template subcommand ──────────────────────────────────────────
 if (cmd === 'template') {
   const sub = args[0]
   ensureTemplatesDir()
 
-  // aiplang template list
   if (!sub || sub === 'list' || sub === 'ls') {
     listTemplates(); process.exit(0)
   }
 
-  // aiplang template save <name> [--from <file>]
   if (sub === 'save' || sub === 'add') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template save <name> [--from <file>]\n'); process.exit(1) }
@@ -318,7 +301,7 @@ if (cmd === 'template') {
       if (!fs.existsSync(fp)) { console.error(`\n  ✗  File not found: ${fp}\n`); process.exit(1) }
       src = fs.readFileSync(fp, 'utf8')
     } else {
-      // Auto-detect: use pages/ directory or app.aip
+
       const sources = ['pages', 'app.aip', 'index.aip']
       const found = sources.find(s => fs.existsSync(s))
       if (!found) { console.error('\n  ✗  No .aip files found. Use --from <file> to specify source.\n'); process.exit(1) }
@@ -335,7 +318,6 @@ if (cmd === 'template') {
     process.exit(0)
   }
 
-  // aiplang template remove <name>
   if (sub === 'remove' || sub === 'rm' || sub === 'delete') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template remove <name>\n'); process.exit(1) }
@@ -345,13 +327,12 @@ if (cmd === 'template') {
     console.log(`\n  ✓  Removed template: ${tname}\n`); process.exit(0)
   }
 
-  // aiplang template edit <name>
   if (sub === 'edit' || sub === 'open') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template edit <name>\n'); process.exit(1) }
     let dest = path.join(TEMPLATES_DIR, tname + '.aip')
     if (!fs.existsSync(dest)) {
-      // create from built-in if exists
+
       const builtin = BUILTIN_TEMPLATES[tname]
       if (builtin) { fs.writeFileSync(dest, builtin); console.log(`\n  ✓  Copied built-in "${tname}" to custom templates.\n`) }
       else { console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1) }
@@ -362,7 +343,6 @@ if (cmd === 'template') {
     process.exit(0)
   }
 
-  // aiplang template show <name>
   if (sub === 'show' || sub === 'cat') {
     const tname = args[1] || 'default'
     const customPath = path.join(TEMPLATES_DIR, tname + '.aip')
@@ -372,7 +352,6 @@ if (cmd === 'template') {
     console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1)
   }
 
-  // aiplang template export <name> [--out <file>]
   if (sub === 'export') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template export <name>\n'); process.exit(1) }
@@ -390,7 +369,6 @@ if (cmd === 'template') {
   process.exit(1)
 }
 
-// ── Init ─────────────────────────────────────────────────────────
 if (cmd==='init') {
   const tplIdx = args.indexOf('--template')
   const tplName = tplIdx !== -1 ? args[tplIdx+1] : 'default'
@@ -399,15 +377,13 @@ if (cmd==='init') {
 
   if (fs.existsSync(dir)) { console.error(`\n  ✗  Directory "${name}" already exists.\n`); process.exit(1) }
 
-  // Get template source (built-in, custom, or file path)
   const tplSrc = getTemplate(tplName, name, year)
 
-  // Check if template has full-stack backend (models/api blocks)
   const isFullStack = tplSrc.includes('\nmodel ') || tplSrc.includes('\napi ')
   const isMultiFile = tplSrc.includes('\n---\n')
 
   if (isFullStack) {
-    // Full-stack project: single app.aip
+
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'app.aip'), tplSrc)
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
@@ -421,7 +397,7 @@ if (cmd==='init') {
     const label = tplName !== 'default' ? ` (template: ${tplName})` : ''
     console.log(`\n  ✓  Created ${name}/${label}\n\n     app.aip  ← full-stack app (backend + frontend)\n\n  Next:\n     cd ${name} && npx aiplang start app.aip\n`)
   } else if (isMultiFile) {
-    // Multi-page SSG project: pages/*.aip
+
     fs.mkdirSync(path.join(dir,'pages'), {recursive:true})
     fs.mkdirSync(path.join(dir,'public'), {recursive:true})
     for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
@@ -439,7 +415,7 @@ if (cmd==='init') {
     const files = fs.readdirSync(path.join(dir,'pages')).map(f=>f).join(', ')
     console.log(`\n  ✓  Created ${name}/${label}\n\n     pages/{${files}}  ← edit these\n\n  Next:\n     cd ${name} && npx aiplang serve\n`)
   } else {
-    // Single-page SSG project
+
     fs.mkdirSync(path.join(dir,'pages'), {recursive:true})
     fs.mkdirSync(path.join(dir,'public'), {recursive:true})
     for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
@@ -454,7 +430,6 @@ if (cmd==='init') {
   process.exit(0)
 }
 
-// ── New ───────────────────────────────────────────────────────────
 if (cmd==='new') {
   const name=args[0]; if(!name){console.error('\n  ✗  Usage: aiplang new <page>\n');process.exit(1)}
   const dir=fs.existsSync('pages')?'pages':'.'
@@ -466,7 +441,6 @@ if (cmd==='new') {
   process.exit(0)
 }
 
-// ── Build ─────────────────────────────────────────────────────────
 if (cmd==='build') {
   const outIdx=args.indexOf('--out')
   const outDir=outIdx!==-1?args[outIdx+1]:'dist'
@@ -476,7 +450,7 @@ if (cmd==='build') {
     fs.readdirSync(input).filter(f=>f.endsWith('.aip')).forEach(f=>files.push(path.join(input,f)))
   } else if(input.endsWith('.aip')&&fs.existsSync(input)){ files.push(input) }
   if(!files.length){console.error(`\n  ✗  No .aip files in: ${input}\n`);process.exit(1)}
-  // Resolve ~import directives recursively
+
   function resolveImports(content, baseDir, seen=new Set()) {
     return content.replace(/^~import\s+["']?([^"'\n]+)["']?$/mg, (_, importPath) => {
       const resolved = path.resolve(baseDir, importPath.trim())
@@ -511,7 +485,6 @@ if (cmd==='build') {
   process.exit(0)
 }
 
-// ── Serve (hot reload) ────────────────────────────────────────────
 if (cmd==='serve'||cmd==='dev') {
   const root=path.resolve(args[0]||'.')
   const port=parseInt(process.env.PORT||'3000')
@@ -549,7 +522,6 @@ if (cmd==='serve'||cmd==='dev') {
   return
 }
 
-// ── Dev server (full-stack) ──────────────────────────────────────
 if (cmd === 'start' || cmd === 'run') {
   const aipFile = args[0]
   if (!aipFile || !fs.existsSync(aipFile)) {
@@ -572,10 +544,6 @@ if (cmd === 'start' || cmd === 'run') {
 
 console.error(`\n  ✗  Unknown command: ${cmd}\n  Run aiplang --help\n`)
 process.exit(1)
-
-// ═════════════════════════════════════════════════════════════════
-// PARSER
-// ═════════════════════════════════════════════════════════════════
 
 function parsePages(src) {
   return src.split(/\n---\n/).map(s=>parsePage(s.trim())).filter(Boolean)
@@ -619,8 +587,7 @@ function parseQuery(s) {
 }
 
 function parseBlock(line) {
-  // ── Extract suffix modifiers FIRST ──────────────────────────
-  // animate:fade-up class:my-class (can appear at end of any block line)
+
   let extraClass=null, animate=null
   const _cm=line.match(/\bclass:(\S+)/)
   if(_cm){extraClass=_cm[1];line=line.replace(_cm[0],'').trim()}
@@ -636,12 +603,10 @@ function parseBlock(line) {
   const _bgm=line.match(/\bbg:(#[0-9a-fA-F]+|[a-z]+)/)
   if(_bgm){bg=_bgm[1];line=line.replace(_bgm[0],'').trim()}
 
-  // ── raw{} HTML passthrough ──────────────────────────────────
   if(line.startsWith('raw{')) {
     return{kind:'raw',html:line.slice(4,line.lastIndexOf('}')),extraClass,animate}
   }
 
-  // ── table ───────────────────────────────────────────────────
   if(line.startsWith('table ') || line.startsWith('table{')) {
     const idx=line.indexOf('{');if(idx===-1) return null
     const start=line.startsWith('table{')?6:6
@@ -659,7 +624,6 @@ function parseBlock(line) {
     return{kind:'table',binding,cols:Array.isArray(cols)?cols:[],empty:parseEmpty(clean),editPath:em?.[2]||null,editMethod:em?.[1]||'PUT',deletePath:dm?.[1]||null,deleteKey:'id',fallback:fallbackM?.[1]?.trim()||null,retry:retryM?.[1]||null,extraClass,animate,variant,style,bg}
   }
 
-  // ── form ────────────────────────────────────────────────────
   if(line.startsWith('form ') || line.startsWith('form{')) {
     const bi=line.indexOf('{');if(bi===-1) return null
     let head=line.slice(line.startsWith('form{')?4:5,bi).trim()
@@ -667,7 +631,7 @@ function parseBlock(line) {
     let action='', optimistic=false; const ai=head.indexOf('=>')
     if(ai!==-1){
       action=head.slice(ai+2).trim()
-      // Optimistic: => @list.optimistic($result)
+
       if(action.includes('.optimistic(')){optimistic=true;action=action.replace('.optimistic','')}
       head=head.slice(0,ai).trim()
     }
@@ -677,7 +641,6 @@ function parseBlock(line) {
     return{kind:'form',method,bpath,action,optimistic,fields:parseFields(content)||[],extraClass,animate,variant,style,bg}
   }
 
-  // ── pricing ─────────────────────────────────────────────────
   if(line.startsWith('pricing{')) {
     const body=line.slice(8,line.lastIndexOf('}')).trim()
     const plans=body.split('|').map(p=>{
@@ -687,14 +650,12 @@ function parseBlock(line) {
     return{kind:'pricing',plans,extraClass,animate,variant,style,bg}
   }
 
-  // ── faq ─────────────────────────────────────────────────────
   if(line.startsWith('faq{')) {
     const body=line.slice(4,line.lastIndexOf('}')).trim()
     const items=body.split('|').map(i=>{const idx=i.indexOf('>');return{q:i.slice(0,idx).trim(),a:i.slice(idx+1).trim()}}).filter(i=>i.q&&i.a)
     return{kind:'faq',items,extraClass,animate}
   }
 
-  // ── testimonial ──────────────────────────────────────────────
   if(line.startsWith('testimonial{')) {
     const body=line.slice(12,line.lastIndexOf('}')).trim()
     const parts=body.split('|').map(x=>x.trim())
@@ -702,12 +663,10 @@ function parseBlock(line) {
     return{kind:'testimonial',author:parts[0],quote:parts[1]?.replace(/^"|"$/g,''),img:imgPart?.slice(4)||null,extraClass,animate}
   }
 
-  // ── gallery ──────────────────────────────────────────────────
   if(line.startsWith('gallery{')) {
     return{kind:'gallery',imgs:line.slice(8,line.lastIndexOf('}')).trim().split('|').map(x=>x.trim()).filter(Boolean),extraClass,animate}
   }
 
-  // ── btn ──────────────────────────────────────────────────────
   if(line.startsWith('btn{')) {
     const parts=line.slice(4,line.lastIndexOf('}')).split('>').map(p=>p.trim())
     const label=parts[0]||'Click', method=parts[1]?.split(' ')[0]||'POST'
@@ -717,7 +676,6 @@ function parseBlock(line) {
     return{kind:'btn',label,method,bpath,action,confirm,extraClass,animate}
   }
 
-  // ── card{} — standalone card customizável ──────────────────
   if(line.startsWith('card{') || line.startsWith('card ')) {
     const bi=line.indexOf('{'); if(bi===-1) return null
     const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
@@ -731,7 +689,6 @@ function parseBlock(line) {
     return{kind:'card',title,subtitle,img:imgPart?.slice(4)||null,link:linkPart||null,badge,bind,extraClass,animate,variant,style,bg}
   }
 
-  // ── cols{} — grid de conteúdo livre ─────────────────────────
   if(line.startsWith('cols{') || (line.startsWith('cols ') && line.includes('{'))) {
     const bi=line.indexOf('{'); if(bi===-1) return null
     const head=line.slice(0,bi).trim()
@@ -742,19 +699,16 @@ function parseBlock(line) {
     return{kind:'cols',n,items,extraClass,animate,variant,style,bg}
   }
 
-  // ── divider{} — separador visual ─────────────────────────────
   if(line.startsWith('divider') || line.startsWith('hr{')) {
     const label=line.match(/\{([^}]*)\}/)?.[1]?.trim()||null
     return{kind:'divider',label,extraClass,animate,variant,style}
   }
 
-  // ── badge{} — label/tag destacado ───────────────────────────
   if(line.startsWith('badge{') || line.startsWith('tag{')) {
     const content=line.slice(line.indexOf('{')+1,line.lastIndexOf('}')).trim()
     return{kind:'badge',content,extraClass,animate,variant,style}
   }
 
-  // ── select ───────────────────────────────────────────────────
   if(line.startsWith('select ')) {
     const bi=line.indexOf('{')
     const varName=bi!==-1?line.slice(7,bi).trim():line.slice(7).trim()
@@ -762,13 +716,11 @@ function parseBlock(line) {
     return{kind:'select',binding:varName,options:body.split('|').map(o=>o.trim()).filter(Boolean),extraClass,animate}
   }
 
-  // ── if ───────────────────────────────────────────────────────
   if(line.startsWith('if ')) {
     const bi=line.indexOf('{');if(bi===-1) return null
     return{kind:'if',cond:line.slice(3,bi).trim(),inner:line.slice(bi+1,line.lastIndexOf('}')).trim(),extraClass,animate}
   }
 
-  // ── chart{} — data visualization ───────────────────────────────
   if(line.startsWith('chart{') || line.startsWith('chart ')) {
     const bi=line.indexOf('{'); if(bi===-1) return null
     const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
@@ -781,7 +733,6 @@ function parseBlock(line) {
     return{kind:'chart',type,binding,labels,values,title,extraClass,animate,variant,style}
   }
 
-  // ── kanban{} — drag-and-drop board ───────────────────────────────
   if(line.startsWith('kanban{') || line.startsWith('kanban ')) {
     const bi=line.indexOf('{'); if(bi===-1) return null
     const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
@@ -793,7 +744,6 @@ function parseBlock(line) {
     return{kind:'kanban',binding,cols,statusField,updatePath,extraClass,animate,style}
   }
 
-  // ── editor{} — rich text editor ──────────────────────────────────
   if(line.startsWith('editor{') || line.startsWith('editor ')) {
     const bi=line.indexOf('{'); if(bi===-1) return null
     const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
@@ -804,7 +754,6 @@ function parseBlock(line) {
     return{kind:'editor',name,placeholder,submitPath,extraClass,animate,style}
   }
 
-  // ── each @list { template } — loop como React .map() ────────
   if(line.startsWith('each ')) {
     const bi=line.indexOf('{');if(bi===-1) return null
     const binding=line.slice(5,bi).trim()
@@ -812,18 +761,15 @@ function parseBlock(line) {
     return{kind:'each',binding,tpl,extraClass,animate,variant}
   }
 
-  // ── spacer{} — espaçamento customizável ──────────────────────
   if(line.startsWith('spacer{') || line.startsWith('spacer ')) {
     const h=line.match(/[{\s](\S+)[}]?/)?.[1]||'3rem'
     return{kind:'spacer',height:h,extraClass,animate}
   }
 
-  // ── html{} — HTML inline com interpolação de @state ──────────
   if(line.startsWith('html{')) {
     return{kind:'html',content:line.slice(5,line.lastIndexOf('}')),extraClass,animate}
   }
 
-  // ── regular blocks (nav, hero, stats, rowN, sect, foot) ──────
   const bi=line.indexOf('{');if(bi===-1) return null
   const head=line.slice(0,bi).trim()
   const body=line.slice(bi+1,line.lastIndexOf('}')).trim()
@@ -846,41 +792,43 @@ function parseCols(s){return s.split('|').map(c=>{c=c.trim();if(c.startsWith('em
 function parseEmpty(s){const m=s.match(/empty:\s*([^|]+)/);return m?m[1].trim():'No data.'}
 function parseFields(s){return s.split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());return label?{label,type:type||'text',placeholder:ph||'',name:label.toLowerCase().replace(/\s+/g,'_')}:null}).filter(Boolean)}
 
-// ═════════════════════════════════════════════════════════════════
-// RENDERER
-// ═════════════════════════════════════════════════════════════════
-
 function applyMods(html, b) {
   if(!html||(!b.extraClass&&!b.animate)) return html
   const cls=[(b.extraClass||''),(b.animate?'fx-anim-'+b.animate:'')].filter(Boolean).join(' ')
-  // Inject into first tag's class attribute (handles multiline HTML)
+
   return html.replace(/class="([^"]*)"/, (_,c)=>`class="${c} ${cls}"`)
 }
 
 function renderPage(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','list','form','if','btn','select','faq'].includes(b.kind))
   const body=page.blocks.map(b=>{try{return applyMods(renderBlock(b,page),b)}catch(e){console.error('[aiplang] Block render error:',b.kind,e.message);return ''}}).join('')
-  // Compiled diff functions per table
+
   const tableBlocks = page.blocks.filter(b => b.kind === 'table' && b.binding && b.cols && b.cols.length)
   const numericKeys = ['score','count','total','amount','price','value','qty','age','rank','num','int','float','rate','pct','percent']
   const compiledDiffs = tableBlocks.map(b => {
     const binding = b.binding.replace(/^@/, '')
+
+    const safeId = s => (s||'').replace(/[^a-zA-Z0-9_]/g, '_').slice(0,64) || 'col'
+    const safeBinding = safeId(binding)
     const colDefs = b.cols.map((col, j) => ({
-      key: col.key,
+      key: safeId(col.key),
+      origKey: col.key,
       idx: j,
       numeric: numericKeys.some(kw => col.key.toLowerCase().includes(kw))
     }))
     const initParts = colDefs.map(d =>
-      d.numeric ? `c${d.idx}:new Float64Array(rows.map(r=>+(r.${d.key})||0))`
-                : `c${d.idx}:rows.map(r=>r.${d.key}??'')`
+      d.numeric ? `c${d.idx}:new Float64Array(rows.map(r=>+(r.${JSON.stringify(d.origKey)}===undefined?r['${d.origKey}']:r[${JSON.stringify(d.origKey)}])||0))`
+                : `c${d.idx}:rows.map(r=>r[${JSON.stringify(d.origKey)}]??'')`
     ).join(',')
-    const diffParts = colDefs.map(d =>
-      d.numeric ? `if(c${d.idx}[i]!==(r.${d.key}||0)){c${d.idx}[i]=r.${d.key}||0;p.push(i<<4|${d.idx})}`
-                : `if(c${d.idx}[i]!==r.${d.key}){c${d.idx}[i]=r.${d.key};p.push(i<<4|${d.idx})}`
-    ).join(';')
+    const diffParts = colDefs.map(d => {
+      const k = JSON.stringify(d.origKey)
+      return d.numeric
+        ? `if(c${d.idx}[i]!==(r[${k}]||0)){c${d.idx}[i]=r[${k}]||0;p.push(i<<4|${d.idx})}`
+        : `if(c${d.idx}[i]!==r[${k}]){c${d.idx}[i]=r[${k}];p.push(i<<4|${d.idx})}`
+    }).join(';')
     return [
-      `window.__aip_init_${binding}=function(rows){return{${initParts}}};`,
-      `window.__aip_diff_${binding}=function(rows,cache){`,
+      `window.__aip_init_${safeBinding}=function(rows){return{${initParts}}};`,
+      `window.__aip_diff_${safeBinding}=function(rows,cache){`,
       `const n=rows.length,p=[],${colDefs.map(d=>`c${d.idx}=cache.c${d.idx}`).join(',')};`,
       `for(let i=0;i<n;i++){const r=rows[i];${diffParts}}return p};`
     ].join('')
@@ -888,11 +836,11 @@ function renderPage(page, allPages) {
   const compiledScript = compiledDiffs.length
     ? `<script>/* aiplang compiled-diffs */\n${compiledDiffs}\n</script>`
     : ''
-  const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries,stores:page.stores||[],computed:page.computed||{},compiledTables:tableBlocks.map(b=>b.binding.replace(/^@/,''))}):''
+  const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries,stores:page.stores||[],computed:page.computed||{},compiledTables:tableBlocks.map(b=>(b.binding||'').replace(/^@/,'').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,64))}):''
   const hydrate=needsJS?`\n<script>window.__AIPLANG_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
   const customVars=page.customTheme?genCustomThemeVars(page.customTheme):''
   const themeVarCSS=page.themeVars?genThemeVarCSS(page.themeVars):''
-  // Extract app name from nav brand if available
+
   const _navBlock = page.blocks.find(b=>b.kind==='nav')
   const _brand = _navBlock?.brand || ''
   const _title = _brand ? `${esc(_brand)} — ${esc(page.id.charAt(0).toUpperCase()+page.id.slice(1))}` : esc(page.id.charAt(0).toUpperCase()+page.id.slice(1))
@@ -948,7 +896,6 @@ function renderBlock(b, page) {
   }
 }
 
-// ── Chart — lazy-loads Chart.js from CDN ────────────────────────
 function rChart(b) {
   const id = 'chart_' + Math.random().toString(36).slice(2,8)
   const binding = b.binding || ''
@@ -959,7 +906,6 @@ function rChart(b) {
 </div>\n`
 }
 
-// ── Kanban — drag-and-drop board ─────────────────────────────────
 function rKanban(b) {
   const cols = (b.cols||['Todo','In Progress','Done'])
   const colsHtml = cols.map(col => `
@@ -971,7 +917,6 @@ function rKanban(b) {
   return `<div class="fx-kanban" data-fx-kanban="${esc(b.binding||'')}" data-status-field="${esc(b.statusField||'status')}" data-update-path="${esc(b.updatePath||'')}"${style}>${colsHtml}</div>\n`
 }
 
-// ── Rich text editor ──────────────────────────────────────────────
 function rEditor(b) {
   const style = b.style ? ` style="${b.style.replace(/,/g,';')}"` : ''
   return `<div class="fx-editor-wrap"${style}>
@@ -1057,7 +1002,7 @@ function rRow(b) {
     pink:'#ec4899',cyan:'#06b6d4',lime:'#84cc16',amber:'#f59e0b'
   }
   const cards=(b.items||[]).map(item=>{
-    // First token can be color: red|rocket>Title>Body
+
     let colorStyle='', firstIdx=0
     if(item[0]&&!item[0].isImg&&!item[0].isLink){
       const colorKey=item[0].text?.toLowerCase()
@@ -1178,7 +1123,6 @@ function rGallery(b) {
   return `<div class="fx-gallery">${imgs}</div>\n`
 }
 
-// ── Theme helpers ─────────────────────────────────────────────────
 function genCustomThemeVars(ct) {
   return `body{background:${ct.bg};color:${ct.text}}.fx-nav{background:${ct.bg}cc;border-bottom:1px solid ${ct.text}18}.fx-cta,.fx-btn{background:${ct.accent};color:#fff}.fx-card{background:${ct.surface||ct.bg};border:1px solid ${ct.text}15}.fx-form{background:${ct.surface||ct.bg};border:1px solid ${ct.text}15}.fx-input{background:${ct.bg};border:1px solid ${ct.text}30;color:${ct.text}}.fx-stat-lbl,.fx-card-body,.fx-sub,.fx-sect-body,.fx-footer-text{color:${ct.text}88}.fx-th,.fx-nav-link{color:${ct.text}77}.fx-footer{border-top:1px solid ${ct.text}15}.fx-th{border-bottom:1px solid ${ct.text}15}`
 }
@@ -1197,10 +1141,6 @@ function genThemeVarCSS(t) {
   if(t.spacing) r.push(`.fx-sect,.fx-hero{padding-top:${t.spacing};padding-bottom:${t.spacing}}`)
   return r.join('')
 }
-
-// ═════════════════════════════════════════════════════════════════
-// CSS
-// ═════════════════════════════════════════════════════════════════
 
 function css(theme) {
   const base=`*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth}body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh}a{text-decoration:none;color:inherit}input,button,select{font-family:inherit}img{max-width:100%;height:auto}.fx-nav{display:flex;align-items:center;justify-content:space-between;padding:1rem 2.5rem;position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);flex-wrap:wrap;gap:.5rem}.fx-brand{font-size:1.25rem;font-weight:800;letter-spacing:-.03em}.fx-nav-links{display:flex;align-items:center;gap:1.75rem}.fx-nav-link{font-size:.875rem;font-weight:500;opacity:.65;transition:opacity .15s}.fx-nav-link:hover{opacity:1}.fx-hamburger{display:none;flex-direction:column;gap:5px;background:none;border:none;cursor:pointer;padding:.25rem}.fx-hamburger span{display:block;width:22px;height:2px;background:currentColor;transition:all .2s;border-radius:1px}.fx-hamburger.open span:nth-child(1){transform:rotate(45deg) translate(5px,5px)}.fx-hamburger.open span:nth-child(2){opacity:0}.fx-hamburger.open span:nth-child(3){transform:rotate(-45deg) translate(5px,-5px)}@media(max-width:640px){.fx-hamburger{display:flex}.fx-nav-links{display:none;width:100%;flex-direction:column;align-items:flex-start;gap:.75rem;padding:.75rem 0}.fx-nav-links.open{display:flex}}.fx-hero{display:flex;align-items:center;justify-content:center;min-height:92vh;padding:4rem 1.5rem}.fx-hero-split{display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:center;padding:4rem 2.5rem;min-height:70vh}@media(max-width:768px){.fx-hero-split{grid-template-columns:1fr}}.fx-hero-img{width:100%;border-radius:1.25rem;object-fit:cover;max-height:500px}.fx-hero-inner{max-width:56rem;text-align:center;display:flex;flex-direction:column;align-items:center;gap:1.5rem}.fx-hero-split .fx-hero-inner{text-align:left;align-items:flex-start;max-width:none}.fx-title{font-size:clamp(2.5rem,8vw,5.5rem);font-weight:900;letter-spacing:-.04em;line-height:1}.fx-sub{font-size:clamp(1rem,2vw,1.25rem);line-height:1.75;max-width:40rem}.fx-cta{display:inline-flex;align-items:center;padding:.875rem 2.5rem;border-radius:.75rem;font-weight:700;font-size:1rem;letter-spacing:-.01em;transition:transform .15s;margin:.25rem}.fx-cta:hover{transform:translateY(-1px)}.fx-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:3rem;padding:5rem 2.5rem;text-align:center}.fx-stat-val{font-size:clamp(2.5rem,5vw,4rem);font-weight:900;letter-spacing:-.04em;line-height:1}.fx-stat-lbl{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;margin-top:.5rem}.fx-grid{display:grid;gap:1.25rem;padding:1rem 2.5rem 5rem}.fx-grid-2{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}.fx-grid-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.fx-grid-4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}.fx-card{border-radius:1rem;padding:1.75rem;transition:transform .2s,box-shadow .2s}.fx-card:hover{transform:translateY(-2px)}.fx-card-img{width:100%;border-radius:.75rem;object-fit:cover;height:180px;margin-bottom:1rem}.fx-icon{font-size:2rem;margin-bottom:1rem}.fx-card-title{font-size:1.0625rem;font-weight:700;letter-spacing:-.02em;margin-bottom:.5rem}.fx-card-body{font-size:.875rem;line-height:1.65}.fx-card-link{font-size:.8125rem;font-weight:600;display:inline-block;margin-top:1rem;opacity:.6;transition:opacity .15s}.fx-card-link:hover{opacity:1}.fx-sect{padding:5rem 2.5rem}.fx-sect-title{font-size:clamp(1.75rem,4vw,3rem);font-weight:800;letter-spacing:-.04em;margin-bottom:1.5rem;text-align:center}.fx-sect-body{font-size:1rem;line-height:1.75;text-align:center;max-width:48rem;margin:0 auto}.fx-form-wrap{padding:3rem 2.5rem;display:flex;justify-content:center}.fx-form{width:100%;max-width:28rem;border-radius:1.25rem;padding:2.5rem}.fx-field{margin-bottom:1.25rem}.fx-label{display:block;font-size:.8125rem;font-weight:600;margin-bottom:.5rem}.fx-input{width:100%;padding:.75rem 1rem;border-radius:.625rem;font-size:.9375rem;outline:none;transition:box-shadow .15s}.fx-input:focus{box-shadow:0 0 0 3px rgba(37,99,235,.35)}.fx-btn{width:100%;padding:.875rem 1.5rem;border:none;border-radius:.625rem;font-size:.9375rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:transform .15s,opacity .15s;letter-spacing:-.01em}.fx-btn:hover{transform:translateY(-1px)}.fx-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}.fx-btn-wrap{padding:0 2.5rem 1.5rem}.fx-standalone-btn{width:auto;padding:.75rem 2rem;margin-top:0}.fx-form-msg{font-size:.8125rem;padding:.5rem 0;min-height:1.5rem;text-align:center}.fx-form-err{color:#f87171}.fx-form-ok{color:#4ade80}.fx-table-wrap{overflow-x:auto;padding:0 2.5rem 4rem}.fx-table{width:100%;border-collapse:collapse;font-size:.875rem}.fx-th{text-align:left;padding:.875rem 1.25rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.fx-th-actions{opacity:.6}.fx-tr{transition:background .1s}.fx-td{padding:.875rem 1.25rem}.fx-td-empty{padding:2rem 1.25rem;text-align:center;opacity:.4}.fx-td-actions{white-space:nowrap;padding:.5rem 1rem!important}.fx-action-btn{border:none;cursor:pointer;font-size:.75rem;font-weight:600;padding:.3rem .75rem;border-radius:.375rem;margin-right:.375rem;font-family:inherit;transition:opacity .15s}.fx-action-btn:hover{opacity:.85}.fx-edit-btn{background:#1e40af;color:#93c5fd}.fx-delete-btn{background:#7f1d1d;color:#fca5a5}.fx-select-wrap{padding:.5rem 2.5rem}.fx-select-block{width:auto;min-width:200px;margin-top:0}.fx-pricing{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1.5rem;padding:2rem 2.5rem 5rem;align-items:start}.fx-pricing-card{border-radius:1.25rem;padding:2rem;position:relative;transition:transform .2s}.fx-pricing-featured{transform:scale(1.03)}.fx-pricing-badge{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#2563eb;color:#fff;font-size:.7rem;font-weight:700;padding:.25rem .875rem;border-radius:999px;white-space:nowrap;letter-spacing:.05em}.fx-pricing-name{font-size:.875rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem;opacity:.7}.fx-pricing-price{font-size:3rem;font-weight:900;letter-spacing:-.05em;line-height:1;margin-bottom:.75rem}.fx-pricing-desc{font-size:.875rem;line-height:1.65;margin-bottom:1.5rem;opacity:.7}.fx-pricing-cta{display:block;text-align:center;padding:.75rem;border-radius:.625rem;font-weight:700;font-size:.9rem;transition:opacity .15s}.fx-pricing-cta:hover{opacity:.85}.fx-faq{max-width:48rem;margin:0 auto}.fx-faq-item{border-radius:.75rem;margin-bottom:.625rem;cursor:pointer;overflow:hidden;transition:background .15s}.fx-faq-q{display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;font-size:.9375rem;font-weight:600}.fx-faq-arrow{transition:transform .2s;font-size:.75rem;opacity:.5}.fx-faq-item.open .fx-faq-arrow{transform:rotate(90deg)}.fx-faq-a{max-height:0;overflow:hidden;padding:0 1.25rem;font-size:.875rem;line-height:1.7;transition:max-height .3s,padding .3s}.fx-faq-item.open .fx-faq-a{max-height:300px;padding:.75rem 1.25rem 1.25rem}.fx-testi-wrap{padding:5rem 2.5rem;display:flex;justify-content:center}.fx-testi{max-width:42rem;text-align:center;display:flex;flex-direction:column;align-items:center;gap:1.25rem}.fx-testi-img{width:64px;height:64px;border-radius:50%;object-fit:cover}.fx-testi-avatar{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:700;background:#1e293b}.fx-testi-quote{font-size:1.25rem;line-height:1.7;font-style:italic;opacity:.9}.fx-testi-author{font-size:.875rem;font-weight:600;opacity:.5}.fx-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;padding:1rem 2.5rem 4rem}.fx-gallery-item{border-radius:.75rem;overflow:hidden;aspect-ratio:4/3}.fx-gallery-item img{width:100%;height:100%;object-fit:cover;transition:transform .3s}.fx-gallery-item:hover img{transform:scale(1.04)}.fx-if-wrap{display:contents}.fx-footer{padding:3rem 2.5rem;text-align:center}.fx-footer-text{font-size:.8125rem}.fx-footer-link{font-size:.8125rem;margin:0 .75rem;opacity:.5;transition:opacity .15s}.fx-footer-link:hover{opacity:1}

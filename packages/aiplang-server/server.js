@@ -250,17 +250,24 @@ const _cache = new Map()
 // Stores a hash of each row per client session to send only changes
 // Key: sessionId:binding → Map<rowId, hash>
 const _deltaCache = new Map()
-const _DELTA_TTL  = 60000 // 1 min: expire client state
+const _DELTA_TTL  = 60000  // 1 min: expire client state
+const _DELTA_MAX  = 2000   // max concurrent sessions (prevent memory DoS)
 
 function _rowHash(row) {
-  // Fast hash for change detection — FNV-1a variant
+  // FNV-1a 32-bit — fast, low collision for row change detection
+  // Only hashes enumerable own properties to avoid prototype pollution
   let h = 2166136261
-  const s = JSON.stringify(row)
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = (h * 16777619) >>> 0
+  const keys = Object.keys(row).sort()
+  for (const k of keys) {
+    const v = row[k]
+    if (v === null || v === undefined) continue
+    const s = k + ':' + String(v)
+    for (let i = 0; i < s.length; i++) {
+      h = (h ^ s.charCodeAt(i)) >>> 0
+      h = Math.imul(h, 16777619) >>> 0
+    }
   }
-  return h
+  return h >>> 0
 }
 
 function _getDelta(sessionId, binding, rows) {
@@ -268,6 +275,12 @@ function _getDelta(sessionId, binding, rows) {
   const prev = _deltaCache.get(key)
   // First request — send full dataset, store hashes
   if (!prev) {
+    // Evict oldest entry when at capacity (LRU approximation)
+    if (_deltaCache.size >= _DELTA_MAX) {
+      let oldest = null, oldestTs = Infinity
+      for (const [k, v] of _deltaCache) if (v.ts < oldestTs) { oldest = k; oldestTs = v.ts }
+      if (oldest) _deltaCache.delete(oldest)
+    }
     const hashes = new Map(rows.map(r => [r.id, _rowHash(r)]))
     _deltaCache.set(key, { hashes, ts: Date.now() })
     return { full: true, rows }
@@ -1032,8 +1045,9 @@ async function execOp(line, ctx, server) {
     if (Array.isArray(result) && ctx.req?.headers?.['x-aiplang-delta'] === '1' && result.length > 0) {
       try {
         const _req = ctx.req
-        const sid = (_req.headers['x-session-id'] || _req.socket?.remoteAddress || 'default').slice(0,64)
-        const binding = (_req.url?.split('?')[0]?.replace(/^\/api\//,'')?.split('/')[0]) || 'data'
+        const sid = (_req.headers['x-session-id'] || _req.socket?.remoteAddress || 'anon').slice(0,64)
+        // Key = session + full path (not just binding) to handle multi-table pages correctly
+        const binding = (_req.url?.split('?')[0] || '/data').slice(0,128)
         const delta = _getDelta(sid, binding, result)
         if (delta.full) {
           ctx.res.json(status, result); return '__DONE__'
@@ -1928,7 +1942,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.10.8',
+    status:'ok', version:'2.10.9',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

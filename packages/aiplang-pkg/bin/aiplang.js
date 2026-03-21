@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.11.4'
+const VERSION     = '2.11.5'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -686,7 +686,7 @@ function generateTypes(app, srcFile) {
   }
 
   lines.push(`// ── aiplang version ──────────────────────────────────────────`)
-  lines.push(`export const AIPLANG_VERSION     = '2.11.4'`)
+  lines.push(`export const AIPLANG_VERSION     = '2.11.5'`)
   lines.push(``)
   return lines.join('\n')
 }
@@ -1040,6 +1040,10 @@ function parseBlock(line) {
     return{kind:'pricing',plans,extraClass,animate,variant,style,bg}
   }
 
+  if(line.startsWith('code{'))      { const m=line.match(/^code\{([^}]*)\}/);if(m){const pts=m[1].split('|');const vm=line.match(/variant:(\S+)/);const am=line.match(/animate:(\S+)/);return{kind:'code',lang:pts[0]?.trim()||'aip',lines:pts.slice(1).map(l=>l.trim()),variant:vm?.[1],animate:am?.[1]}} }
+  if(line.startsWith('benchmark{')) { const m=line.match(/^benchmark\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);const am=line.match(/animate:(\S+)/);return{kind:'benchmark',items:m[1].split('|').map(it=>{const p=it.trim().split(':');return{num:p[0]?.trim(),label:p[1]?.trim(),vs:p[2]?.trim(),pct:parseInt(p[3])||0}}),variant:vm?.[1],animate:am?.[1]}} }
+  if(line.startsWith('install{'))   { const m=line.match(/^install\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'install',cmds:m[1].split('|').map(c=>c.trim()).filter(Boolean),variant:vm?.[1]}} }
+  if(line.startsWith('feature{'))   { const b=parseBlock(line.replace(/^feature/,'row3'));if(b){b.variant='feature'};return b }
   if(line.startsWith('faq{')) {
     const body=line.slice(4,line.lastIndexOf('}')).trim()
     const items=body.split('|').map(i=>{const idx=i.indexOf('>');return{q:i.slice(0,idx).trim(),a:i.slice(idx+1).trim()}}).filter(i=>i.q&&i.a)
@@ -1268,6 +1272,10 @@ function renderBlock(b, page) {
     case 'select':      return rSelectBlock(b)
     case 'pricing':     return rPricing(b)
     case 'faq':         return rFaq(b)
+    case 'code':        return rCode(b)
+    case 'benchmark':   return rBenchmark(b)
+    case 'install':     return rInstall(b)
+    case 'feature':     return rRow(b)
     case 'testimonial': return rTestimonial(b)
     case 'gallery':     return rGallery(b)
     case 'raw':         return (b.html||'')+'\n'
@@ -1347,6 +1355,49 @@ function rNav(b) {
   return `<nav class="fx-nav">${brand}<button class="fx-hamburger" onclick="this.classList.toggle('open');document.querySelector('.fx-nav-links').classList.toggle('open')" aria-label="Menu"><span></span><span></span><span></span></button><div class="fx-nav-links">${links}</div></nav>\n`
 }
 
+
+
+// ── Parser: code{lang|linha1|linha2} ─────────────────────────────
+function parseCode(line) {
+  const m = line.match(/^code\{([^}]*)\}/)
+  if (!m) return null
+  const parts = m[1].split('|')
+  const lang = parts[0]?.trim() || 'aip'
+  const lines = parts.slice(1).map(l => l.trim())
+  const b = parseBlockMeta(line)
+  return { ...b, kind:'code', lang, lines }
+}
+
+// ── Parser: benchmark{Num:Label:vs texto|...} ─────────────────────
+function parseBenchmark(line) {
+  const m = line.match(/^benchmark\{([^}]*)\}/)
+  if (!m) return null
+  const items = m[1].split('|').map(item => {
+    const parts = item.trim().split(':')
+    return { num: parts[0]?.trim(), label: parts[1]?.trim(), vs: parts[2]?.trim(), pct: parts[3]?.trim() }
+  })
+  const b = parseBlockMeta(line)
+  return { ...b, kind:'benchmark', items }
+}
+
+// ── Parser: install{cmd1|cmd2|...} ───────────────────────────────
+function parseInstall(line) {
+  const m = line.match(/^install\{([^}]*)\}/)
+  if (!m) return null
+  const cmds = m[1].split('|').map(c => c.trim()).filter(Boolean)
+  const b = parseBlockMeta(line)
+  return { ...b, kind:'install', cmds }
+}
+
+// ── Parser: feature{emoji>Título>Desc | ...} (alias row3 otimizado)
+function parseFeature(line) {
+  // Converte feature{} em row{} com cols=3 e variant=feature
+  const inner = line.replace(/^feature/, 'row3')
+  const b = parseRow(inner)
+  if (b) b.variant = 'feature'
+  return b
+}
+
 function rHero(b) {
   let h1='',sub='',img='',ctas=''
   for(const item of (b.items||[])) for(const f of item){
@@ -1358,6 +1409,10 @@ function rHero(b) {
   const v = b.variant || (img ? 'split' : 'centered')
   const bgStyle = b.bg ? ` style="background:${b.bg}"` : b.style ? ` style="${b.style.replace(/,/g,';')}"` : ''
   const inlineStyle = b.style && !b.bg ? ` style="${b.style.replace(/,/g,';')}"` : ''
+  if (v === 'landing') {
+    return `<section class="fx-hero fx-hero-landing"${bgStyle}><div class="fx-hero-inner">${h1}${sub}${ctas}</div></section>
+`
+  }
   if (v === 'minimal') {
     return `<section class="fx-hero fx-hero-minimal"${bgStyle}><div class="fx-hero-inner">${h1}${sub}${ctas}</div></section>\n`
   }
@@ -1430,13 +1485,102 @@ function rSect(b) {
   return `<section class="fx-sect${cls}"${bgStyle}>${inner}</section>\n`
 }
 
+
+// ── rCode: code window com syntax highlight ───────────────────────
+function rCode(b) {
+  const lang = b.lang || 'aip'
+  const id = 'code_' + Math.random().toString(36).slice(2,7)
+  const highlighted = (b.lines||[]).map(line => {
+    let l = esc(line)
+    if(lang==='aip'||lang==='aiplang') {
+      l = l.replace(/^(~\w+)/g,'<span class="fx-kw">$1</span>')
+      l = l.replace(/\$([\w.]+)/g,'<span class="fx-nb">$$$1</span>')
+      l = l.replace(/(\{[^}]*\})/g,'<span class="fx-op">$1</span>')
+      l = l.replace(/(#[\w-]+(?:\.\w+)*)/g,'<span class="fx-comment">$1</span>')
+    } else if(lang==='bash'||lang==='sh') {
+      l = l.replace(/^(\$ )/,'<span class="fx-kw">$1</span>')
+      l = l.replace(/(#.*$)/,'<span class="fx-comment">$1</span>')
+      l = l.replace(/(npx aiplang \w+)/g,'<span class="fx-fn">$1</span>')
+    } else if(lang==='js'||lang==='ts') {
+      l = l.replace(/\b(const|let|var|function|async|await|return|import|from|export|if|else|for)\b/g,'<span class="fx-kw">$1</span>')
+      l = l.replace(/(\/\/.*$)/,'<span class="fx-comment">$1</span>')
+      l = l.replace(/(['"`][^'"`]*['"`])/g,'<span class="fx-st">$1</span>')
+    }
+    return `<div class="fx-code-line">${l}</div>`
+  }).join('')
+  const copyBtn = `<button class="fx-code-copy" onclick="(function(b){navigator.clipboard&&navigator.clipboard.writeText(b.querySelectorAll('.fx-code-line').length?Array.from(b.querySelectorAll('.fx-code-line')).map(l=>l.innerText).join('\\n'):'');var t=b.querySelector('.fx-code-copy');t&&(t.textContent='copiado!',setTimeout(()=>t.textContent='copiar',1500))})(this.closest('.fx-code-window'))">copiar</button>`
+  return `<div class="fx-code-window"><div class="fx-code-bar"><div class="fx-dots"><span></span><span></span><span></span></div><span class="fx-code-lang">${esc(lang)}</span>${copyBtn}</div><div class="fx-code-body" id="${id}">${highlighted}</div></div>\n`
+}
+
+// ── rBenchmark: cards de benchmark com número + barra ─────────────
+function rBenchmark(b) {
+  const cards = (b.items||[]).map(item => {
+    const pct = item.pct || (item.num && item.num.includes('%') ? parseInt(item.num) : 85)
+    const n = item.num || ''
+    const isLow = pct < 20
+    return `<div class="fx-bench-card">
+  <div class="fx-bench-label">${esc(item.label||'')}</div>
+  <div class="fx-bench-num">${esc(n)}</div>
+  ${item.vs ? `<div class="fx-bench-vs">${esc(item.vs)}</div>` : ''}
+  <div class="fx-bench-bar"><div class="fx-bench-fill" style="width:${isLow?pct+'%':pct+'%'}"></div></div>
+</div>`
+  }).join('')
+  return `<div class="fx-benchmark">${cards}</div>\n`
+}
+
+// ── rInstall: multi-step code box com botões ──────────────────────
+function rInstall(b) {
+  const steps = (b.cmds||[]).map((cmd,i) => {
+    const isComment = cmd.startsWith('#')
+    if(isComment) return `<div class="fx-install-comment">${esc(cmd.slice(1).trim())}</div>`
+    return `<div class="fx-install-line"><span class="fx-install-prompt">$</span><span class="fx-install-cmd">${esc(cmd)}</span></div>`
+  }).join('')
+  const firstCmd = (b.cmds||[]).find(c => !c.startsWith('#')) || ''
+  const copy = `navigator.clipboard&&navigator.clipboard.writeText(${JSON.stringify(firstCmd)})`
+  return `<div class="fx-install-wrap">
+  <div class="fx-code-bar"><div class="fx-dots"><span></span><span></span><span></span></div><span class="fx-code-lang">terminal</span><button class="fx-code-copy" onclick="${copy};var t=this;t.textContent='copiado!';setTimeout(()=>t.textContent='copiar',1500)">copiar</button></div>
+  <div class="fx-install-body">${steps}</div>
+</div>\n`
+}
+
+// ── rStats upgrade: suporte a subtítulo via "val:label:vs" ────────
+function rStatsUpgraded(b) {
+  const cells = (b.items||[]).map(item => {
+    const raw = item[0]?.text || ''
+    const parts = raw.split(':')
+    const val = parts[0]?.trim()
+    const lbl = parts[1]?.trim()
+    const vs  = parts[2]?.trim()
+    const bind = isDyn(val) ? ` data-fx-bind="${esc(val)}"` : ''
+    return `<div class="fx-stat">
+  <div class="fx-stat-val"${bind}>${esc(val)}</div>
+  <div class="fx-stat-lbl">${esc(lbl||'')}</div>
+  ${vs ? `<div class="fx-stat-vs">${esc(vs)}</div>` : ''}
+</div>`
+  }).join('')
+  return `<div class="fx-stats">${cells}</div>\n`
+}
+
 function rFoot(b) {
+  let brand='', links='', note=''
+  let itemIdx = 0
+  for(const item of (b.items||[])) for(const f of item){
+    if(f.isLink) links+=`<a href="${esc(f.path)}" class="fx-footer-link">${esc(f.label)}</a>`
+    else if(itemIdx===0) { brand=`<span class="fx-footer-brand">${esc(f.text)}</span>`; itemIdx++ }
+    else note=`<span class="fx-footer-note">${esc(f.text)}</span>`
+  }
+  if(brand||links){
+    return `<footer class="fx-footer"><div class="fx-footer-inner">${brand}<div class="fx-footer-links">${links}</div>${note}</div></footer>
+`
+  }
+  // fallback centrado
   let inner=''
   for(const item of (b.items||[])) for(const f of item){
     if(f.isLink) inner+=`<a href="${esc(f.path)}" class="fx-footer-link">${esc(f.label)}</a>`
     else inner+=`<p class="fx-footer-text">${esc(f.text)}</p>`
   }
-  return `<footer class="fx-footer">${inner}</footer>\n`
+  return `<footer class="fx-footer">${inner}</footer>
+`
 }
 
 function rTable(b) {
@@ -1557,6 +1701,51 @@ function genThemeVarCSS(t) {
 
 function css(theme) {
   const base=`*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth}body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh}a{text-decoration:none;color:inherit}input,button,select{font-family:inherit}img{max-width:100%;height:auto}.fx-nav{display:flex;align-items:center;justify-content:space-between;padding:1rem 2.5rem;position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);flex-wrap:wrap;gap:.5rem}.fx-brand{font-size:1.25rem;font-weight:800;letter-spacing:-.03em}.fx-nav-links{display:flex;align-items:center;gap:1.75rem}.fx-nav-link{font-size:.875rem;font-weight:500;opacity:.65;transition:opacity .15s}.fx-nav-link:hover{opacity:1}.fx-hamburger{display:none;flex-direction:column;gap:5px;background:none;border:none;cursor:pointer;padding:.25rem}.fx-hamburger span{display:block;width:22px;height:2px;background:currentColor;transition:all .2s;border-radius:1px}.fx-hamburger.open span:nth-child(1){transform:rotate(45deg) translate(5px,5px)}.fx-hamburger.open span:nth-child(2){opacity:0}.fx-hamburger.open span:nth-child(3){transform:rotate(-45deg) translate(5px,-5px)}@media(max-width:640px){.fx-hamburger{display:flex}.fx-nav-links{display:none;width:100%;flex-direction:column;align-items:flex-start;gap:.75rem;padding:.75rem 0}.fx-nav-links.open{display:flex}}.fx-hero{display:flex;align-items:center;justify-content:center;min-height:92vh;padding:4rem 1.5rem}.fx-hero-split{display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:center;padding:4rem 2.5rem;min-height:70vh}@media(max-width:768px){.fx-hero-split{grid-template-columns:1fr}}.fx-hero-img{width:100%;border-radius:1.25rem;object-fit:cover;max-height:500px}.fx-hero-inner{max-width:56rem;text-align:center;display:flex;flex-direction:column;align-items:center;gap:1.5rem}.fx-hero-split .fx-hero-inner{text-align:left;align-items:flex-start;max-width:none}.fx-title{font-size:clamp(2.5rem,8vw,5.5rem);font-weight:900;letter-spacing:-.04em;line-height:1}.fx-sub{font-size:clamp(1rem,2vw,1.25rem);line-height:1.75;max-width:40rem}.fx-cta{display:inline-flex;align-items:center;padding:.875rem 2.5rem;border-radius:.75rem;font-weight:700;font-size:1rem;letter-spacing:-.01em;transition:transform .15s;margin:.25rem}.fx-cta:hover{transform:translateY(-1px)}.fx-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:3rem;padding:5rem 2.5rem;text-align:center}.fx-stat-val{font-size:clamp(2.5rem,5vw,4rem);font-weight:900;letter-spacing:-.04em;line-height:1}.fx-stat-lbl{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;margin-top:.5rem}.fx-grid{display:grid;gap:1.25rem;padding:1rem 2.5rem 5rem}.fx-grid-2{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}.fx-grid-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.fx-grid-4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}.fx-card{border-radius:1rem;padding:1.75rem;transition:transform .2s,box-shadow .2s}.fx-card:hover{transform:translateY(-2px)}.fx-card-img{width:100%;border-radius:.75rem;object-fit:cover;height:180px;margin-bottom:1rem}.fx-icon{font-size:2rem;margin-bottom:1rem}.fx-card-title{font-size:1.0625rem;font-weight:700;letter-spacing:-.02em;margin-bottom:.5rem}.fx-card-body{font-size:.875rem;line-height:1.65}.fx-card-link{font-size:.8125rem;font-weight:600;display:inline-block;margin-top:1rem;opacity:.6;transition:opacity .15s}.fx-card-link:hover{opacity:1}.fx-sect{padding:5rem 2.5rem}.fx-sect-title{font-size:clamp(1.75rem,4vw,3rem);font-weight:800;letter-spacing:-.04em;margin-bottom:1.5rem;text-align:center}.fx-sect-body{font-size:1rem;line-height:1.75;text-align:center;max-width:48rem;margin:0 auto}.fx-form-wrap{padding:3rem 2.5rem;display:flex;justify-content:center}.fx-form{width:100%;max-width:28rem;border-radius:1.25rem;padding:2.5rem}.fx-field{margin-bottom:1.25rem}.fx-label{display:block;font-size:.8125rem;font-weight:600;margin-bottom:.5rem}.fx-input{width:100%;padding:.75rem 1rem;border-radius:.625rem;font-size:.9375rem;outline:none;transition:box-shadow .15s}.fx-input:focus{box-shadow:0 0 0 3px rgba(37,99,235,.35)}.fx-btn{width:100%;padding:.875rem 1.5rem;border:none;border-radius:.625rem;font-size:.9375rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:transform .15s,opacity .15s;letter-spacing:-.01em}.fx-btn:hover{transform:translateY(-1px)}.fx-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}.fx-btn-wrap{padding:0 2.5rem 1.5rem}.fx-standalone-btn{width:auto;padding:.75rem 2rem;margin-top:0}.fx-form-msg{font-size:.8125rem;padding:.5rem 0;min-height:1.5rem;text-align:center}.fx-form-err{color:#f87171}.fx-form-ok{color:#4ade80}.fx-table-wrap{overflow-x:auto;padding:0 2.5rem 4rem}.fx-table{width:100%;border-collapse:collapse;font-size:.875rem}.fx-th{text-align:left;padding:.875rem 1.25rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.fx-th-actions{opacity:.6}.fx-tr{transition:background .1s}.fx-td{padding:.875rem 1.25rem}.fx-td-empty{padding:2rem 1.25rem;text-align:center;opacity:.4}.fx-td-actions{white-space:nowrap;padding:.5rem 1rem!important}.fx-action-btn{border:none;cursor:pointer;font-size:.75rem;font-weight:600;padding:.3rem .75rem;border-radius:.375rem;margin-right:.375rem;font-family:inherit;transition:opacity .15s}.fx-action-btn:hover{opacity:.85}.fx-edit-btn{background:#1e40af;color:#93c5fd}.fx-delete-btn{background:#7f1d1d;color:#fca5a5}.fx-select-wrap{padding:.5rem 2.5rem}.fx-select-block{width:auto;min-width:200px;margin-top:0}.fx-pricing{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1.5rem;padding:2rem 2.5rem 5rem;align-items:start}.fx-pricing-card{border-radius:1.25rem;padding:2rem;position:relative;transition:transform .2s}.fx-pricing-featured{transform:scale(1.03)}.fx-pricing-badge{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#2563eb;color:#fff;font-size:.7rem;font-weight:700;padding:.25rem .875rem;border-radius:999px;white-space:nowrap;letter-spacing:.05em}.fx-pricing-name{font-size:.875rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem;opacity:.7}.fx-pricing-price{font-size:3rem;font-weight:900;letter-spacing:-.05em;line-height:1;margin-bottom:.75rem}.fx-pricing-desc{font-size:.875rem;line-height:1.65;margin-bottom:1.5rem;opacity:.7}.fx-pricing-cta{display:block;text-align:center;padding:.75rem;border-radius:.625rem;font-weight:700;font-size:.9rem;transition:opacity .15s}.fx-pricing-cta:hover{opacity:.85}.fx-faq{max-width:48rem;margin:0 auto}.fx-faq-item{border-radius:.75rem;margin-bottom:.625rem;cursor:pointer;overflow:hidden;transition:background .15s}.fx-faq-q{display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;font-size:.9375rem;font-weight:600}.fx-faq-arrow{transition:transform .2s;font-size:.75rem;opacity:.5}.fx-faq-item.open .fx-faq-arrow{transform:rotate(90deg)}.fx-faq-a{max-height:0;overflow:hidden;padding:0 1.25rem;font-size:.875rem;line-height:1.7;transition:max-height .3s,padding .3s}.fx-faq-item.open .fx-faq-a{max-height:300px;padding:.75rem 1.25rem 1.25rem}.fx-testi-wrap{padding:5rem 2.5rem;display:flex;justify-content:center}.fx-testi{max-width:42rem;text-align:center;display:flex;flex-direction:column;align-items:center;gap:1.25rem}.fx-testi-img{width:64px;height:64px;border-radius:50%;object-fit:cover}.fx-testi-avatar{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:700;background:#1e293b}.fx-testi-quote{font-size:1.25rem;line-height:1.7;font-style:italic;opacity:.9}.fx-testi-author{font-size:.875rem;font-weight:600;opacity:.5}.fx-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem;padding:1rem 2.5rem 4rem}.fx-gallery-item{border-radius:.75rem;overflow:hidden;aspect-ratio:4/3}.fx-gallery-item img{width:100%;height:100%;object-fit:cover;transition:transform .3s}.fx-gallery-item:hover img{transform:scale(1.04)}.fx-if-wrap{display:contents}.fx-footer{padding:3rem 2.5rem;text-align:center}.fx-footer-text{font-size:.8125rem}.fx-footer-link{font-size:.8125rem;margin:0 .75rem;opacity:.5;transition:opacity .15s}.fx-footer-link:hover{opacity:1}
+/* ── code window ── */
+.fx-code-window{border-radius:.875rem;overflow:hidden;border:1px solid rgba(255,255,255,.08);margin:0 2.5rem 2rem}
+.fx-code-bar{display:flex;align-items:center;gap:.75rem;padding:.625rem 1rem;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.06)}
+.fx-dots{display:flex;gap:.375rem}
+.fx-dots span{width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.15)}
+.fx-dots span:nth-child(1){background:#ff5f57}.fx-dots span:nth-child(2){background:#febc2e}.fx-dots span:nth-child(3){background:#28c840}
+.fx-code-lang{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;opacity:.35;font-family:monospace;margin-left:.25rem}
+.fx-code-copy{margin-left:auto;font-family:monospace;font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.4);padding:.2rem .625rem;border-radius:.3rem;cursor:pointer;transition:all .15s}
+.fx-code-copy:hover{border-color:rgba(255,255,255,.3);color:rgba(255,255,255,.7)}
+.fx-code-body{padding:1.375rem 1.5rem;overflow-x:auto}
+.fx-code-line{font-family:"JetBrains Mono","Fira Code","Courier New",monospace;font-size:.8rem;line-height:1.75;color:#8899aa;white-space:pre}
+.fx-kw{color:#c792ea}.fx-st{color:#c3e88d}.fx-fn{color:#82aaff}.fx-nb{color:#f78c6c}.fx-op{color:var(--accent,#ff5722)}.fx-comment{color:#3d5166;font-style:italic}
+/* ── benchmark ── */
+.fx-benchmark{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;padding:1rem 2.5rem 4rem}
+.fx-bench-card{border-radius:1rem;padding:1.5rem;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02);position:relative;overflow:hidden}
+.fx-bench-card::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--accent,#ff5722),transparent)}
+.fx-bench-label{font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;opacity:.5;margin-bottom:.5rem;font-family:monospace}
+.fx-bench-num{font-size:clamp(2rem,5vw,3.5rem);font-weight:900;letter-spacing:-.04em;line-height:1;color:var(--accent,#ff5722)}
+.fx-bench-vs{font-size:.7rem;opacity:.4;margin-top:.25rem;font-family:monospace}
+.fx-bench-bar{margin-top:1rem;height:5px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden}
+.fx-bench-fill{height:100%;border-radius:3px;background:var(--accent,#ff5722);transition:width 1.5s cubic-bezier(.4,0,.2,1)}
+/* ── install ── */
+.fx-install-wrap{border-radius:.875rem;overflow:hidden;border:1px solid rgba(255,255,255,.08);margin:0 2.5rem 2rem;max-width:540px}
+.fx-install-body{padding:1.25rem 1.5rem}
+.fx-install-line{display:flex;gap:.75rem;padding:.25rem 0;font-family:"JetBrains Mono","Courier New",monospace;font-size:.8rem;line-height:1.7}
+.fx-install-prompt{color:var(--accent,#ff5722);flex-shrink:0}
+.fx-install-cmd{color:rgba(255,255,255,.85)}
+.fx-install-comment{font-family:"JetBrains Mono","Courier New",monospace;font-size:.72rem;color:rgba(255,255,255,.25);padding:.25rem 0;font-style:italic}
+/* ── stats upgrade ── */
+.fx-stat-vs{font-size:.65rem;opacity:.35;margin-top:.2rem;letter-spacing:.02em}
+/* ── hero landing (dark variant) grid + glow ── */
+.fx-hero-landing{position:relative;overflow:hidden}
+.fx-hero-landing::before{content:"";position:absolute;inset:0;background:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px);background-size:60px 60px;mask-image:radial-gradient(ellipse 70% 60% at 50% 50%,black,transparent);pointer-events:none}
+.fx-hero-landing::after{content:"";position:absolute;width:700px;height:500px;border-radius:50%;background:radial-gradient(ellipse,rgba(255,87,34,.13) 0%,transparent 70%);left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;animation:fx-breathe 6s ease-in-out infinite}
+@keyframes fx-breathe{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.1)}}
+/* ── feature grid ── */
+.fx-grid-feature{gap:1rem}
+.fx-grid-feature .fx-card{transition:border-color .2s,transform .15s}
+.fx-grid-feature .fx-card:hover{border-color:rgba(255,87,34,.25)}
+.fx-grid-feature .fx-icon{width:44px;height:44px;border-radius:.75rem;display:flex;align-items:center;justify-content:center;background:rgba(255,87,34,.08);border:1px solid rgba(255,87,34,.15)}
+/* ── footer upgrade ── */
+.fx-footer-inner{max-width:1100px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem}
+.fx-footer-brand{font-size:1rem;font-weight:800;letter-spacing:-.02em}
+.fx-footer-links{display:flex;gap:1.5rem;flex-wrap:wrap}
+.fx-footer-note{font-size:.72rem;opacity:.3;font-family:monospace}
 .fx-hero-minimal{min-height:50vh!important}
 .fx-hero-minimal .fx-hero-inner{gap:1rem}
 .fx-hero-tall{min-height:98vh!important}

@@ -499,7 +499,7 @@ function hydrateTables() {
               db.onclick = async () => {
                 if (!await confirm('Delete this record? This cannot be undone.')) return
                 const {ok,data} = await http('DELETE', resolvePath(delPath,_row), null)
-                if (ok) { set(key,(get(key)||[]).filter((_,j)=>j!==_i)); toast('Deleted','ok') }
+                if (ok) { const _dtr=db.closest('tr');_animateExit(_dtr,'fx-exit',()=>set(key,(get(key)||[]).filter((_,j)=>j!==_i)));toast('Deleted','ok') }
                 else toast(data.message||'Error deleting','err')
               }
               actTd.appendChild(db)
@@ -539,7 +539,7 @@ function hydrateTables() {
             const actTd = document.createElement('td')
             actTd.className = 'fx-td fx-td-actions'; actTd.style.cssText = 'white-space:nowrap'
             if (editPath) { const eb=document.createElement('button');eb.className='fx-action-btn fx-edit-btn';eb.textContent='✎ Edit';const _r=row,_i=idx;eb.onclick=async()=>{const upd=await editModal(_r,cols,editPath,editMethod,key);if(!upd)return;const arr=[...(get(key)||[])];arr[_i]={..._r,...upd};set(key,arr)};actTd.appendChild(eb) }
-            if (delPath) { const db=document.createElement('button');db.className='fx-action-btn fx-delete-btn';db.textContent='✕ Delete';const _r=row,_i=idx;db.onclick=async()=>{if(!await confirm('Delete?'))return;const{ok,data}=await http('DELETE',resolvePath(delPath,_r),null);if(ok){set(key,(get(key)||[]).filter((_,j)=>j!==_i));toast('Deleted','ok')}else toast(data.message||'Error','err')};actTd.appendChild(db) }
+            if (delPath) { const db=document.createElement('button');db.className='fx-action-btn fx-delete-btn';db.textContent='✕ Delete';const _r=row,_i=idx;db.onclick=async()=>{if(!await confirm('Delete?'))return;const{ok,data}=await http('DELETE',resolvePath(delPath,_r),null);if(ok){const _dtr2=db.closest('tr');_animateExit(_dtr2,'fx-exit',()=>set(key,(get(key)||[]).filter((_,j)=>j!==_i)));toast('Deleted','ok')}else toast(data.message||'Error','err')};actTd.appendChild(db) }
             tr.appendChild(actTd)
           }
           return tr
@@ -752,6 +752,32 @@ function initAnimations() {
     .fx-visible.fx-anim-stagger > *:nth-child(6) { animation-delay: .5s }
     .fx-anim-bounce { animation: fx-bounce 1.5s ease-in-out infinite !important; opacity: 1 !important }
     .fx-anim-pulse  { animation: fx-pulse-ring 2s ease infinite !important; opacity: 1 !important }
+
+    /* ── Exit animations (AnimatePresence) ─────── */
+    @keyframes fx-exit-fade   { to{opacity:0;transform:scale(.95)} }
+    @keyframes fx-exit-up     { to{opacity:0;transform:translateY(-16px)} }
+    @keyframes fx-exit-down   { to{opacity:0;transform:translateY(16px)} }
+    @keyframes fx-exit-left   { to{opacity:0;transform:translateX(-20px)} }
+    @keyframes fx-exit-right  { to{opacity:0;transform:translateX(20px)} }
+    @keyframes fx-exit-shrink { to{opacity:0;transform:scale(0);max-height:0;padding:0;margin:0} }
+    .fx-exit           { pointer-events:none!important; animation: fx-exit-fade   .25s ease forwards }
+    .fx-exit-up        { pointer-events:none!important; animation: fx-exit-up     .25s ease forwards }
+    .fx-exit-down      { pointer-events:none!important; animation: fx-exit-down   .25s ease forwards }
+    .fx-exit-left      { pointer-events:none!important; animation: fx-exit-left   .22s ease forwards }
+    .fx-exit-right     { pointer-events:none!important; animation: fx-exit-right  .22s ease forwards }
+    .fx-exit-shrink    { pointer-events:none!important; animation: fx-exit-shrink .3s ease forwards; overflow:hidden }
+
+    /* ── Enter animations for new rows ─────────── */
+    @keyframes fx-enter-row { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:none} }
+    .fx-row-enter { animation: fx-enter-row .25s ease both }
+
+    /* ── FLIP layout transition ─────────────────── */
+    .fx-flip-pending { transition: transform .3s cubic-bezier(.4,0,.2,1) !important }
+
+    /* ── Drag with inertia ───────────────────────── */
+    .fx-dragging { opacity:.7; cursor:grabbing!important; z-index:1000; position:relative }
+    .fx-drag-ghost { opacity:.3; transition:none }
+    .fx-drop-target { outline:2px dashed rgba(99,102,241,.5); outline-offset:2px }
   `
   document.head.appendChild(style)
 
@@ -772,8 +798,149 @@ function initAnimations() {
     observer.observe(el)
   })
 
-  window.aiplang = window.aiplang || {}
-  window.aiplang.spring = function(el, prop, from, to, opts = {}) {
+  // ── AnimatePresence — animate elements before DOM removal ──────────
+// Like Framer Motion AnimatePresence. exitClass: 'fx-exit', 'fx-exit-left', etc.
+function _animateExit(el, exitClass, callback) {
+  if (!el) { callback && callback(); return }
+  exitClass = exitClass || 'fx-exit'
+  el.classList.add(exitClass)
+  const done = () => { el.removeEventListener('animationend', done); callback && callback() }
+  el.addEventListener('animationend', done, { once: true })
+  // Fallback: force removal after 350ms max (safety net)
+  setTimeout(() => { el.classList.contains(exitClass) && callback && callback() }, 350)
+}
+
+// ── FLIP layout animation ─────────────────────────────────────────
+// Capture positions BEFORE a DOM change, then animate FROM old TO new
+// Like Framer Motion layout prop — zero extra markup required
+function _flipCapture(elements) {
+  const rects = new Map()
+  elements.forEach(el => rects.set(el, el.getBoundingClientRect()))
+  return rects
+}
+function _flipPlay(rects, duration) {
+  duration = duration || 300
+  rects.forEach((oldRect, el) => {
+    if (!el.isConnected) return
+    const newRect = el.getBoundingClientRect()
+    const dx = oldRect.left - newRect.left
+    const dy = oldRect.top  - newRect.top
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+    // Invert: move el back to where it was
+    el.style.transform = `translate(${dx}px,${dy}px)`
+    el.style.transition = 'none'
+    // Play: animate to final position
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.style.transition = `transform ${duration}ms cubic-bezier(.4,0,.2,1)`
+      el.style.transform = ''
+      const clean = () => { el.style.transform = ''; el.style.transition = '' }
+      el.addEventListener('transitionend', clean, { once: true })
+    }))
+  })
+}
+
+// ── Spring physics (improved — overshoot + settle) ────────────────
+function _spring(el, prop, from, to, opts) {
+  const k = opts && opts.stiffness || 200
+  const b = opts && opts.damping   || 22
+  const m = opts && opts.mass      || 1
+  const unit = opts && opts.unit   || 'px'
+  let pos = from, vel = 0, raf
+  const dt = 1/60
+  const tick = () => {
+    const F = -k*(pos-to) - b*vel
+    vel += (F/m)*dt; pos += vel*dt
+    el.style[prop] = pos + unit
+    if (Math.abs(pos-to) > 0.05 || Math.abs(vel) > 0.05) {
+      raf = requestAnimationFrame(tick)
+    } else {
+      el.style[prop] = to + unit
+    }
+  }
+  cancelAnimationFrame(raf)
+  requestAnimationFrame(tick)
+}
+
+// ── Drag with inertia ─────────────────────────────────────────────
+// HTML5 drag is used for kanban. This adds pointer-based drag
+// for any element with data-fx-draggable attribute.
+// Inertia: on pointerup, continues movement with exponential decay.
+function _initDragInertia(el, opts) {
+  opts = opts || {}
+  const onDrop = opts.onDrop
+  let startX, startY, lastX, lastY, velX = 0, velY = 0
+  let lastTime, raf, isDragging = false
+
+  el.style.cursor = 'grab'
+  el.style.userSelect = 'none'
+  el.style.touchAction = 'none'
+
+  const onDown = e => {
+    e.preventDefault()
+    isDragging = true
+    el.classList.add('fx-dragging')
+    startX = lastX = e.clientX
+    startY = lastY = e.clientY
+    lastTime = Date.now()
+    velX = velY = 0
+    cancelAnimationFrame(raf)
+    document.addEventListener('pointermove', onMove, { passive: false })
+    document.addEventListener('pointerup', onUp, { once: true })
+  }
+
+  const onMove = e => {
+    if (!isDragging) return
+    const now = Date.now()
+    const dt = Math.max(now - lastTime, 1)
+    const dx = e.clientX - lastX
+    const dy = e.clientY - lastY
+    // Exponential moving average for velocity
+    velX = velX * 0.7 + (dx / dt) * 0.3 * 16
+    velY = velY * 0.7 + (dy / dt) * 0.3 * 16
+    lastX = e.clientX; lastY = e.clientY; lastTime = now
+    const totalDx = e.clientX - startX
+    const totalDy = e.clientY - startY
+    el.style.transform = `translate(${totalDx}px,${totalDy}px)`
+  }
+
+  const onUp = e => {
+    isDragging = false
+    el.classList.remove('fx-dragging')
+    document.removeEventListener('pointermove', onMove)
+    const speed = Math.sqrt(velX*velX + velY*velY)
+    if (speed < 0.5) {
+      el.style.transition = 'transform .3s cubic-bezier(.4,0,.2,1)'
+      el.style.transform = ''
+      onDrop && onDrop(e)
+      return
+    }
+    // Inertia: continue with decay
+    let dx = parseFloat(el.style.transform.match(/translate\(([^,]+)/)?.[1]) || 0
+    let dy = parseFloat(el.style.transform.match(/,([^)]+)/)?.[1]) || 0
+    const decay = () => {
+      velX *= 0.88; velY *= 0.88
+      dx += velX; dy += velY
+      el.style.transform = `translate(${dx}px,${dy}px)`
+      if (Math.abs(velX) > 0.5 || Math.abs(velY) > 0.5) {
+        raf = requestAnimationFrame(decay)
+      } else {
+        el.style.transition = 'transform .2s cubic-bezier(.4,0,.2,1)'
+        el.style.transform = ''
+        onDrop && onDrop(e)
+      }
+    }
+    raf = requestAnimationFrame(decay)
+  }
+
+  el.addEventListener('pointerdown', onDown)
+  return () => el.removeEventListener('pointerdown', onDown)
+}
+
+window.aiplang = window.aiplang || {}
+  window.aiplang.animateExit = _animateExit
+window.aiplang.flip = { capture: _flipCapture, play: _flipPlay }
+window.aiplang.draggable = _initDragInertia
+window.aiplang.spring = function(el, prop, from, to, opts = {}) {
     const k  = opts.stiffness || 180
     const b  = opts.damping   || 22
     const m  = opts.mass      || 1
@@ -1204,6 +1371,17 @@ function hydrateTableErrors() {
   }
 }
 
+function initDraggables() {
+  document.querySelectorAll('[data-fx-draggable]').forEach(el => {
+    _initDragInertia(el, {
+      onDrop: e => {
+        const action = el.getAttribute('data-fx-drop-action')
+        if (action) applyAction({}, null, action)
+      }
+    })
+  })
+}
+
 function boot() {
   loadSSRData()
   injectActionCSS()
@@ -1221,6 +1399,7 @@ function boot() {
   hydrateCharts()
   hydrateKanban()
   hydrateEditors()
+  initDraggables()
   mountQueries()
 }
 

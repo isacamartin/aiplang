@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.10.9'
+const VERSION     = '2.11.0'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -36,6 +36,8 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
     npx aiplang init [name] --template my-custom     use a saved custom template
     npx aiplang serve [dir]                  dev server + hot reload
     npx aiplang build [dir/file]             compile → static HTML
+    npx aiplang validate <app.aip>           validate syntax with AI-friendly errors
+    npx aiplang context [app.aip]            dump minimal AI context (<500 tokens)
     npx aiplang new <page>                   new page template
     npx aiplang --version
 
@@ -438,6 +440,104 @@ if (cmd==='new') {
   const cap=name.charAt(0).toUpperCase()+name.slice(1)
   fs.writeFileSync(file,`# ${name}\n%${name} dark /${name}\n\nnav{AppName>/home:Home}\nhero{${cap}|Description.>/action:Get started}\nfoot{© ${new Date().getFullYear()} AppName}\n`)
   console.log(`\n  ✓  Created ${file}\n`)
+  process.exit(0)
+}
+
+function validateAipSrc(source) {
+  const errors = []
+  const lines = source.split('\n')
+  const knownDirs = new Set(['db','auth','env','mail','s3','stripe','plan','admin','realtime','use','plugin','import','store','ssr','interval','mount','theme','guard','validate','unique','hash','check','cache','rateLimit','broadcast','soft-delete','belongs'])
+  for (let i=0; i<lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line || line.startsWith('#')) continue
+    const dm = line.match(/^(guard|validate|unique|hash|check|cache|mount|store|ssr|interval|auth|db|env|use|plugin|import|theme|rateLimit|broadcast)\b/)
+    if (dm && !line.startsWith('~') && !line.startsWith('api ') && !line.startsWith('model ') && !line.startsWith('%')) {
+      errors.push({ line:i+1, code:line, message:`Missing ~ before '${dm[1]}'`, fix:`~${line}`, severity:'error' })
+    }
+    if (line.startsWith('api ') && !line.includes('{')) {
+      errors.push({ line:i+1, code:line, message:"api block missing '{'", fix:line+' { return {} }', severity:'error' })
+    }
+    if (/^[a-z_]+\s+-\s+[a-z]/.test(line) && !line.startsWith('api') && !line.startsWith('model')) {
+      errors.push({ line:i+1, code:line, message:"Use ':' not '-' in field definitions", fix:line.replace(/\s*-\s*/g,' : '), severity:'error' })
+    }
+    if (line.startsWith('~')) {
+      const dir = line.slice(1).split(/\s/)[0]
+      if (!knownDirs.has(dir)) errors.push({ line:i+1, code:line, message:`Unknown directive ~${dir}`, severity:'warning' })
+    }
+    if (/^table\s*\{/.test(line)) {
+      errors.push({ line:i+1, code:line, message:"table missing @binding — e.g.: table @users { Name:name | ... }", severity:'error' })
+    }
+  }
+  return errors
+}
+
+if (cmd==='validate'||cmd==='check'||cmd==='lint') {
+  const file = args[0]
+  if (!file) { console.error('\n  Usage: aiplang validate <app.aip>\n'); process.exit(1) }
+  if (!require('fs').existsSync(file)) { console.error(`\n  ✗  File not found: ${file}\n`); process.exit(1) }
+  const src = require('fs').readFileSync(file,'utf8')
+  const errs = validateAipSrc(src)
+  if (!errs.length) { console.log('\n  ✓  Syntax OK — safe to run\n'); process.exit(0) }
+  console.log(`\n  ✗  ${errs.length} issue(s) found in ${file}:\n`)
+  errs.forEach(e => {
+    const icon = e.severity==='error' ? '✗' : '⚠'
+    console.log(`  ${icon}  Line ${e.line}: ${e.message}`)
+    console.log(`       ${e.code}`)
+    if (e.fix) console.log(`     Fix: ${e.fix}`)
+  })
+  console.log()
+  process.exit(errs.some(e=>e.severity==='error') ? 1 : 0)
+}
+
+if (cmd==='context'||cmd==='ctx') {
+  const file = args[0] || 'app.aip'
+  const exists = require('fs').existsSync
+  const src = exists(file) ? require('fs').readFileSync(file,'utf8') : null
+  if (!src) { console.log('\n  Usage: aiplang context [app.aip]\n  Dumps minimal AI context (~200 tokens).\n'); process.exit(0) }
+  // Use server's parseApp for full app structure
+  const serverPath = require('path').join(__dirname,'../server/server.js')
+  let app = { models:[], apis:[], pages:[], db:null, auth:null }
+  try {
+    const srv = require(serverPath)
+    if (srv.parseApp) app = srv.parseApp(src)
+  } catch {
+    // Fallback: basic parse for models + routes
+    const modelRx = /^model\s+(\w+)/gm
+    const apiRx = /^api\s+(\w+)\s+(\S+)/gm
+    let m
+    while((m=modelRx.exec(src))) app.models.push({name:m[1],fields:[]})
+    while((m=apiRx.exec(src))) app.apis.push({method:m[1],path:m[2],guards:[]})
+    const pageRx = /^%(\w+)\s+(\w+)\s+(\S+)/gm
+    while((m=pageRx.exec(src))) app.pages.push({id:m[1],theme:m[2],route:m[3],state:{},queries:[]})
+  }
+  const out = [
+    `# aiplang app — ${file}`,
+    '# paste into AI for maintenance/customization',
+    '',
+    '## MODELS'
+  ]
+  for (const m of app.models||[]) {
+    const fields = m.fields.map(f=>`${f.name}:${f.type}${f.modifiers?.length?':'+f.modifiers.join(':'):''}`).join(' ')
+    out.push(`model ${m.name} { ${fields} }`)
+  }
+  out.push('')
+  out.push('## ROUTES')
+  for (const r of app.apis||[]) {
+    const g = r.guards?.length ? ` [${r.guards.join(',')}]` : ''
+    const v = r.validate?.length ? ` validate:${r.validate.length}` : ''
+    out.push(`${r.method.padEnd(7)}${r.path}${g}${v}`)
+  }
+  out.push('')
+  out.push('## PAGES')
+  for (const p of app.pages||[]) {
+    const state = Object.keys(p.state||{}).map(k=>`@${k}`).join(' ')
+    const queries = (p.queries||[]).map(q=>`${q.trigger}:${q.path}`).join(' ')
+    out.push(`%${p.id} ${p.theme||'dark'} ${p.route} | state:${state||'none'} | queries:${queries||'none'}`)
+  }
+  if (app.db) { out.push(''); out.push(`## CONFIG\ndb:${app.db.driver} auth:${app.auth?'jwt':'none'}`) }
+  const ctx = out.join('\n')
+  console.log(ctx)
+  console.log(`\n# ~${Math.ceil(ctx.length/4)} tokens`)
   process.exit(0)
 }
 
@@ -1060,7 +1160,8 @@ function rTable(b) {
   const span=cols.length+((b.editPath||b.deletePath)?1:0)
   const fallbackAttr=b.fallback?` data-fx-fallback="${esc(b.fallback)}"`:''
   const retryAttr=b.retry?` data-fx-retry="${esc(b.retry)}"`:''
-  return `<div class="fx-table-wrap"><table class="fx-table" data-fx-table="${esc(b.binding)}" data-fx-cols='${keys}' data-fx-col-map='${cm}'${ea}${da}${fallbackAttr}${retryAttr}><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${span}" class="fx-td-empty">${esc(b.empty)}</td></tr></tbody></table></div>\n`
+  const exitAttr=b.animateExit?` data-fx-exit="${esc(b.animateExit)}"`:'';
+  return `<div class="fx-table-wrap"><table class="fx-table"${exitAttr} data-fx-table="${esc(b.binding)}" data-fx-cols='${keys}' data-fx-col-map='${cm}'${ea}${da}${fallbackAttr}${retryAttr}><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${span}" class="fx-td-empty">${esc(b.empty)}</td></tr></tbody></table></div>\n`
 }
 
 function rForm(b) {

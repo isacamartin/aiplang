@@ -312,6 +312,60 @@ setInterval(() => {
 const _mpEnc=(()=>{const te=new TextEncoder();function encode(v){const b=[];_w(v,b);return Buffer.from(b)}function _w(v,b){if(v===null||v===undefined){b.push(0xc0);return}if(v===false){b.push(0xc2);return}if(v===true){b.push(0xc3);return}const t=typeof v;if(t==='number'){if(Number.isInteger(v)&&v>=0&&v<=127){b.push(v);return}if(Number.isInteger(v)&&v>=-32&&v<0){b.push(v+256);return}if(Number.isInteger(v)&&v>=0&&v<=65535){b.push(0xcd,v>>8,v&0xff);return}const dv=new DataView(new ArrayBuffer(8));dv.setFloat64(0,v);b.push(0xcb,...new Uint8Array(dv.buffer));return}if(t==='string'){const e=te.encode(v);const n=e.length;if(n<=31)b.push(0xa0|n);else if(n<=255)b.push(0xd9,n);else b.push(0xda,n>>8,n&0xff);b.push(...e);return}if(Array.isArray(v)){const n=v.length;if(n<=15)b.push(0x90|n);else b.push(0xdc,n>>8,n&0xff);v.forEach(x=>_w(x,b));return}if(t==='object'){const ks=Object.keys(v);const n=ks.length;if(n<=15)b.push(0x80|n);else b.push(0xde,n>>8,n&0xff);ks.forEach(k=>{_w(k,b);_w(v[k],b)});return}}return{encode}})()
 
 
+// ── AI-optimized .aip validator with fix suggestions ──────────────
+function validateAip(source) {
+  const errors = []
+  const lines = source.split('\n')
+  const knownDirectives = ['db','auth','env','mail','s3','stripe','plan','admin','realtime','use','plugin','import','store','ssr','interval','mount','theme','guard','validate','unique','hash','check','cache','rateLimit','broadcast','soft-delete','belongs']
+  const knownBlocks = ['nav','hero','stats','row','row2','row3','sect','foot','table','form','btn','pricing','faq','testimonial','gallery','each','chart','kanban','editor','card','cols','spacer','html','divider','badge','select','if','raw']
+  const knownApiOps = ['insert','update','delete','return','~guard','~validate','~unique','~hash','~check','~cache','~rateLimit','~broadcast']
+
+  for (let i=0; i<lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line || line.startsWith('#')) continue
+
+    // Detect missing ~ on directives
+    const directiveMatch = line.match(/^(guard|validate|unique|hash|check|cache|mount|store|ssr|interval|realtime|auth|db|env|use|plugin|import|theme|rateLimit|broadcast)\s/)
+    if (directiveMatch && !line.startsWith('~') && !line.startsWith('api ') && !line.startsWith('model ') && !line.startsWith('%')) {
+      errors.push({
+        line: i+1, code: line,
+        message: `Directive '${directiveMatch[1]}' missing ~ prefix`,
+        fix: `~${line}`,
+        severity: 'error'
+      })
+    }
+
+    // Detect api without { }
+    if (line.startsWith('api ') && !line.includes('{')) {
+      errors.push({
+        line: i+1, code: line,
+        message: 'api block missing opening {',
+        fix: line + ' { return {} }',
+        severity: 'error'
+      })
+    }
+
+    // Detect unknown ~directive
+    if (line.startsWith('~')) {
+      const dir = line.slice(1).split(/\s/)[0]
+      if (!knownDirectives.includes(dir) && !dir.match(/^[a-z]+$/)) {
+        errors.push({ line: i+1, code: line, message: `Unknown directive: ~${dir}`, severity: 'warning' })
+      }
+    }
+
+    // Detect model fields with wrong separator
+    if (/^[a-z_]+\s*-\s*[a-z]/.test(line) && !line.startsWith('api') && !line.startsWith('model')) {
+      errors.push({
+        line: i+1, code: line,
+        message: "Field definition uses '-' separator, should use ':'",
+        fix: line.replace(/\s*-\s*/g, ' : '),
+        severity: 'error'
+      })
+    }
+  }
+  return errors
+}
+
 function cacheSet(key, value, ttlMs = 60000) {
   _cache.set(key, { value, expires: Date.now() + ttlMs })
 }
@@ -1941,8 +1995,42 @@ async function startServer(aipFile, port = 3000) {
   })
 
   // Health
+  // ── AI introspection: GET /__aip ──────────────────────────────────
+  srv.addRoute('GET', '/__aip', (req, res) => {
+    const modelInfo = {}
+    for (const [name, M] of Object.entries(srv._models || {})) {
+      modelInfo[name.toLowerCase()] = {
+        fields: M.fields ? M.fields.map(f => ({
+          name:f.name, type:f.type,
+          required:!!(f.modifiers?.includes('required')),
+          unique:!!(f.modifiers?.includes('unique')),
+          hashed:!!(f.modifiers?.includes('hashed'))
+        })) : [],
+        count: (() => { try { return M.count() } catch { return null } })()
+      }
+    }
+    const routeList = (srv._routes||[]).map(r=>({method:r.method,path:r.path,guards:r.guards||[]}))
+    res.json(200, {
+      version: VERSION,
+      models: modelInfo,
+      routes: routeList,
+      ai_hint: 'POST /__aip/validate with {source:"..."} to check .aip before applying.'
+    })
+  })
+
+  // POST /__aip/validate
+  srv.addRoute('POST', '/__aip/validate', async (req, res) => {
+    const { source } = req.body || {}
+    if (!source) { res.error(400, 'Body: { source: "aip content" }'); return }
+    try {
+      const errs = validateAip(source)
+      if (errs.length) res.json(422, { valid:false, errors:errs, fixes:errs.map(e=>e.fix).filter(Boolean) })
+      else res.json(200, { valid:true, message:'Syntax OK. Safe to apply.' })
+    } catch(e) { res.error(500, e.message) }
+  })
+
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.10.9',
+    status:'ok', version:'2.11.0',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

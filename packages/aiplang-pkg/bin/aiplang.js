@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.10.7'
+const VERSION     = '2.10.8'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -860,7 +860,35 @@ function applyMods(html, b) {
 function renderPage(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','list','form','if','btn','select','faq'].includes(b.kind))
   const body=page.blocks.map(b=>{try{return applyMods(renderBlock(b,page),b)}catch(e){console.error('[aiplang] Block render error:',b.kind,e.message);return ''}}).join('')
-  const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries,stores:page.stores||[],computed:page.computed||{}}):''
+  // Compiled diff functions per table
+  const tableBlocks = page.blocks.filter(b => b.kind === 'table' && b.binding && b.cols && b.cols.length)
+  const numericKeys = ['score','count','total','amount','price','value','qty','age','rank','num','int','float','rate','pct','percent']
+  const compiledDiffs = tableBlocks.map(b => {
+    const binding = b.binding.replace(/^@/, '')
+    const colDefs = b.cols.map((col, j) => ({
+      key: col.key,
+      idx: j,
+      numeric: numericKeys.some(kw => col.key.toLowerCase().includes(kw))
+    }))
+    const initParts = colDefs.map(d =>
+      d.numeric ? `c${d.idx}:new Float64Array(rows.map(r=>+(r.${d.key})||0))`
+                : `c${d.idx}:rows.map(r=>r.${d.key}??'')`
+    ).join(',')
+    const diffParts = colDefs.map(d =>
+      d.numeric ? `if(c${d.idx}[i]!==(r.${d.key}||0)){c${d.idx}[i]=r.${d.key}||0;p.push(i<<4|${d.idx})}`
+                : `if(c${d.idx}[i]!==r.${d.key}){c${d.idx}[i]=r.${d.key};p.push(i<<4|${d.idx})}`
+    ).join(';')
+    return [
+      `window.__aip_init_${binding}=function(rows){return{${initParts}}};`,
+      `window.__aip_diff_${binding}=function(rows,cache){`,
+      `const n=rows.length,p=[],${colDefs.map(d=>`c${d.idx}=cache.c${d.idx}`).join(',')};`,
+      `for(let i=0;i<n;i++){const r=rows[i];${diffParts}}return p};`
+    ].join('')
+  }).join('\n')
+  const compiledScript = compiledDiffs.length
+    ? `<script>/* aiplang compiled-diffs */\n${compiledDiffs}\n</script>`
+    : ''
+  const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries,stores:page.stores||[],computed:page.computed||{},compiledTables:tableBlocks.map(b=>b.binding.replace(/^@/,''))}):''
   const hydrate=needsJS?`\n<script>window.__AIPLANG_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
   const customVars=page.customTheme?genCustomThemeVars(page.customTheme):''
   const themeVarCSS=page.themeVars?genThemeVarCSS(page.themeVars):''

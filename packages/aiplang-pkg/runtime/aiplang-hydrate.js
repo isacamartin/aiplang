@@ -105,14 +105,55 @@ function resolvePath(tmpl, row) {
 
 const _intervals = []
 
+// Persistent session ID for delta tracking
+const _sid = Math.random().toString(36).slice(2)
+
 async function runQuery(q) {
   const path = resolve(q.path)
-  const opts = { method: q.method, headers: { 'Content-Type': 'application/json' } }
+  const isGet = (q.method || 'GET').toUpperCase() === 'GET'
+  const opts = {
+    method: q.method || 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/msgpack, application/json',
+      'x-session-id': _sid
+    }
+  }
+  // Enable delta updates for GET requests after first load
+  if (isGet && q._deltaReady) opts.headers['x-aiplang-delta'] = '1'
   if (q.body) opts.body = JSON.stringify(q.body)
   try {
-    const res  = await fetch(path, opts)
+    const res = await fetch(path, opts)
+    // 304 = nothing changed — skip re-render
+    if (res.status === 304) { q._deltaReady = true; return null }
     if (!res.ok) throw new Error('HTTP ' + res.status)
-    const data = await res.json()
+    const ct = res.headers.get('Content-Type') || ''
+    let data
+    if (ct.includes('msgpack')) {
+      const buf = await res.arrayBuffer()
+      data = _mp.decode(new Uint8Array(buf))
+    } else {
+      data = await res.json()
+    }
+    // Delta response: merge into existing state instead of replacing
+    if (data && data.__delta) {
+      const key = q.target ? q.target.replace(/^@/, '') : null
+      if (key) {
+        const current = [...(get(key) || [])]
+        // Apply changes
+        for (const row of (data.changed || [])) {
+          const idx = current.findIndex(r => r.id === row.id)
+          if (idx >= 0) current[idx] = row; else current.push(row)
+        }
+        // Remove deleted
+        const delSet = new Set(data.deleted || [])
+        const merged = current.filter(r => !delSet.has(r.id))
+        set(key, merged)
+        q._deltaReady = true
+        return merged
+      }
+    }
+    q._deltaReady = true
     applyAction(data, q.target, q.action)
     return data
   } catch (e) {
@@ -484,10 +525,17 @@ function hydrateTables() {
           frag.appendChild(tr)
         }
         tbody.appendChild(frag)
-        // Build TypedArray cache for ultra-fast subsequent diffs (beats Vue Vapor)
+        // Build compiled cache (Tier 1) + typed cache (Tier 2)
         try {
           const tc = _buildTypedCache(rows, _colKeys)
           _rowCache._typed = tc
+          // Compiled diff: use __aip_init_binding if available
+          const compiledInit = window['__aip_init_' + stateKey]
+          if (compiledInit) {
+            _rowCache._compiled   = compiledInit(rows)
+            _rowCache._compiled_n = rows.length
+            _rowCache._ids        = rows.map(r => r.id != null ? r.id : null)
+          }
         } catch {}
       } else {
         // UPDATE: off-main-thread diff + requestIdleCallback
@@ -833,12 +881,24 @@ function injectActionCSS() {
 // Main thread only handles tiny DOM patches — never competes with animations.
 // ═══════════════════════════════════════════════════════════════════
 
-const _workerSrc = `'use strict'
+const _workerSrc = `
+'use strict'
+// aiplang Diff Worker v2 — SharedArrayBuffer edition
+// Uses SAB when available (HTTPS + COOP/COEP headers)
+// Falls back to postMessage for unsupported environments
+
+let _sab = null, _sabView = null
+
 self.onmessage = function(e) {
-  const { type, rows, colKeys, cache, reqId } = e.data
+  const { type, rows, colKeys, cache, reqId, sab } = e.data
+
+  // Accept SharedArrayBuffer reference
+  if (sab) { _sab = sab; _sabView = new Int32Array(sab) }
+
   if (type !== 'diff') return
   const patches = [], inserts = [], deletes = []
   const seenIds = new Set()
+
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const id = row.id != null ? row.id : i
@@ -852,15 +912,32 @@ self.onmessage = function(e) {
     }
   }
   for (const id in cache) {
-    const nid = typeof id === 'number' ? id : (isNaN(id) ? id : Number(id))
+    const nid = isNaN(id) ? id : Number(id)
     if (!seenIds.has(String(id)) && !seenIds.has(nid)) deletes.push(id)
   }
-  self.postMessage({ type: 'patches', patches, inserts, deletes, reqId })
-}`
+
+  // Write to SharedArrayBuffer if available (zero-copy)
+  if (_sabView && patches.length < 8000) {
+    Atomics.store(_sabView, 0, patches.length)
+    for (let i = 0; i < patches.length; i++) {
+      // Pack: patchIdx[i*3+0]=id_hash, [i*3+1]=col, [i*3+2]=encoded_val
+      _sabView[1 + i*3]   = typeof patches[i].id === 'number' ? patches[i].id : patches[i].id.length
+      _sabView[1 + i*3+1] = patches[i].col
+      _sabView[1 + i*3+2] = 0 // signal: read from patches array
+    }
+    Atomics.store(_sabView, 0, patches.length | 0x80000000) // MSB = done flag
+    // Still send full patch data for non-numeric values
+    self.postMessage({ type: 'patches', patches, inserts, deletes, reqId, usedSAB: true })
+  } else {
+    self.postMessage({ type: 'patches', patches, inserts, deletes, reqId, usedSAB: false })
+  }
+}
+`
 
 let _diffWorker = null
 const _wCbs = new Map()
 let _wReq = 0
+let _wSAB = null // SharedArrayBuffer view for zero-copy transfers
 
 function _getWorker() {
   if (_diffWorker) return _diffWorker
@@ -871,6 +948,12 @@ function _getWorker() {
       if (cb) { cb(e.data); _wCbs.delete(e.data.reqId) }
     }
     _diffWorker.onerror = () => { _diffWorker = null }
+    // Share a buffer for high-frequency zero-copy patch transfer
+    try {
+      const sab = new SharedArrayBuffer(8000 * 3 * 4 + 4) // 8k patches × 3 ints × 4 bytes + header
+      _diffWorker.postMessage({ type: 'init_sab', sab }, [])
+      _wSAB = new Int32Array(sab)
+    } catch {} // SAB not available (requires HTTPS + COOP headers)
   } catch { _diffWorker = null }
   return _diffWorker
 }
@@ -925,14 +1008,33 @@ function _diffSync(rows, colKeys, rowCache) {
   const patches = [], inserts = [], deletes = [], seen = new Set()
   const nCols = colKeys.length
 
-  // FAST PATH: TypedArray positional scan — beats Vue Vapor at all sizes
-  // Condition: row count unchanged (typical for polling updates)
+  // TIER 1 — COMPILED DIFF: use generated monomorphic function if available
+  // Generated at build time — specific field access, no generic loops
+  const compiledKey = stateKey  // table binding name
+  const compiledInit = window['__aip_init_' + compiledKey]
+  const compiledDiff = window['__aip_diff_' + compiledKey]
+
+  if (compiledDiff && rowCache._compiled && rows.length === rowCache._compiled_n) {
+    // Decode bitpacked patches: i<<4|colIdx
+    const raw = compiledDiff(rows, rowCache._compiled)
+    for (const pack of raw) {
+      const i = pack >> 4, col = pack & 0xf
+      const id = rowCache._ids[i]
+      if (id != null) {
+        seen.add(id)
+        patches.push({ id, col, val: rows[i][colKeys[col]] })
+      }
+    }
+    for (const [id] of rowCache) if (id !== '_compiled' && id !== '_ids' && id !== '_compiled_n' && !seen.has(id)) deletes.push(id)
+    return { patches, inserts, deletes }
+  }
+
+  // TIER 2 — TYPED CACHE fast path
   const tc = rowCache._typed
   if (tc && rows.length === tc.n) {
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i], id = tc.ids[i]
       seen.add(id)
-      // Per-column diff using per-column strategy
       for (let j = 0; j < nCols; j++) {
         const k = colKeys[j]
         const newVal = r[k]
@@ -1017,6 +1119,48 @@ const _STATUS_INT = {active:0,inactive:1,pending:2,blocked:3,
   enabled:0,disabled:1,true:0,false:1,yes:0,no:1,
   pending:2,done:3,todo:0,doing:1,done:2,
   new:0,open:1,closed:2,resolved:3}
+
+// ── Minimal MessagePack decoder (~1.8KB) ─────────────────────────
+// Handles all types produced by aiplang server's msgpack encoder
+// No external dependencies — AI-maintained, human-unreadable by design
+const _mp = (() => {
+  const td = new TextDecoder()
+  function decode(buf) {
+    const b = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf
+    return _read(b, {p:0})
+  }
+  function _read(b, s) {
+    const t = b[s.p++]
+    if (t <= 0x7f) return t                           // positive fixint
+    if (t >= 0xe0) return t - 256                     // negative fixint
+    if ((t & 0xe0) === 0xa0) return _str(b, s, t & 0x1f) // fixstr
+    if ((t & 0xf0) === 0x90) return _arr(b, s, t & 0xf)  // fixarray
+    if ((t & 0xf0) === 0x80) return _map(b, s, t & 0xf)  // fixmap
+    switch (t) {
+      case 0xc0: return null
+      case 0xc2: return false
+      case 0xc3: return true
+      case 0xca: { const v=new DataView(b.buffer,b.byteOffset+s.p,4); s.p+=4; return v.getFloat32(0) }
+      case 0xcb: { const v=new DataView(b.buffer,b.byteOffset+s.p,8); s.p+=8; return v.getFloat64(0) }
+      case 0xcc: return b[s.p++]
+      case 0xcd: { const v=(b[s.p]<<8)|b[s.p+1]; s.p+=2; return v }
+      case 0xce: { const v=new DataView(b.buffer,b.byteOffset+s.p,4); s.p+=4; return v.getUint32(0) }
+      case 0xd0: { const v=b[s.p++]; return v>127?v-256:v }
+      case 0xd1: { const v=(b[s.p]<<8)|b[s.p+1]; s.p+=2; return v>32767?v-65536:v }
+      case 0xd2: { const v=new DataView(b.buffer,b.byteOffset+s.p,4); s.p+=4; return v.getInt32(0) }
+      case 0xd9: { const n=b[s.p++]; return _str(b,s,n) }
+      case 0xda: { const n=(b[s.p]<<8)|b[s.p+1]; s.p+=2; return _str(b,s,n) }
+      case 0xdc: { const n=(b[s.p]<<8)|b[s.p+1]; s.p+=2; return _arr(b,s,n) }
+      case 0xdd: { const v=new DataView(b.buffer,b.byteOffset+s.p,4); s.p+=4; return _arr(b,s,v.getUint32(0)) }
+      case 0xde: { const n=(b[s.p]<<8)|b[s.p+1]; s.p+=2; return _map(b,s,n) }
+      default: return null
+    }
+  }
+  function _str(b,s,n){const v=td.decode(b.subarray(s.p,s.p+n));s.p+=n;return v}
+  function _arr(b,s,n){const a=[];for(let i=0;i<n;i++)a.push(_read(b,s));return a}
+  function _map(b,s,n){const o={};for(let i=0;i<n;i++){const k=_read(b,s);o[k]=_read(b,s)}return o}
+  return { decode }
+})()
 
 function loadSSRData() {
   const ssr = window.__SSR_DATA__

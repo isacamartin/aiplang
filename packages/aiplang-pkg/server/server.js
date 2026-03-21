@@ -246,6 +246,59 @@ async function processQueue() {
 
 // ── Cache in-memory com TTL ──────────────────────────────────────
 const _cache = new Map()
+// ── Delta update cache ─────────────────────────────────────────────
+// Stores a hash of each row per client session to send only changes
+// Key: sessionId:binding → Map<rowId, hash>
+const _deltaCache = new Map()
+const _DELTA_TTL  = 60000 // 1 min: expire client state
+
+function _rowHash(row) {
+  // Fast hash for change detection — FNV-1a variant
+  let h = 2166136261
+  const s = JSON.stringify(row)
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = (h * 16777619) >>> 0
+  }
+  return h
+}
+
+function _getDelta(sessionId, binding, rows) {
+  const key = sessionId + ':' + binding
+  const prev = _deltaCache.get(key)
+  // First request — send full dataset, store hashes
+  if (!prev) {
+    const hashes = new Map(rows.map(r => [r.id, _rowHash(r)]))
+    _deltaCache.set(key, { hashes, ts: Date.now() })
+    return { full: true, rows }
+  }
+  // Subsequent: compute delta
+  const changed = [], deleted = []
+  const newHashes = new Map()
+  for (const row of rows) {
+    const h = _rowHash(row)
+    newHashes.set(row.id, h)
+    if (prev.hashes.get(row.id) !== h) changed.push(row)
+  }
+  for (const [id] of prev.hashes) {
+    if (!newHashes.has(id)) deleted.push(id)
+  }
+  prev.hashes = newHashes; prev.ts = Date.now()
+  // Nothing changed — return 304-like empty delta
+  if (!changed.length && !deleted.length) return { full: false, changed: [], deleted: [], version: prev.ts }
+  return { full: false, changed, deleted, version: Date.now() }
+}
+
+// Clean up stale delta caches
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of _deltaCache) if (now - v.ts > _DELTA_TTL * 5) _deltaCache.delete(k)
+}, _DELTA_TTL)
+
+// ── MessagePack encoder (AI-maintained) ────────────────────────────
+const _mpEnc=(()=>{const te=new TextEncoder();function encode(v){const b=[];_w(v,b);return Buffer.from(b)}function _w(v,b){if(v===null||v===undefined){b.push(0xc0);return}if(v===false){b.push(0xc2);return}if(v===true){b.push(0xc3);return}const t=typeof v;if(t==='number'){if(Number.isInteger(v)&&v>=0&&v<=127){b.push(v);return}if(Number.isInteger(v)&&v>=-32&&v<0){b.push(v+256);return}if(Number.isInteger(v)&&v>=0&&v<=65535){b.push(0xcd,v>>8,v&0xff);return}const dv=new DataView(new ArrayBuffer(8));dv.setFloat64(0,v);b.push(0xcb,...new Uint8Array(dv.buffer));return}if(t==='string'){const e=te.encode(v);const n=e.length;if(n<=31)b.push(0xa0|n);else if(n<=255)b.push(0xd9,n);else b.push(0xda,n>>8,n&0xff);b.push(...e);return}if(Array.isArray(v)){const n=v.length;if(n<=15)b.push(0x90|n);else b.push(0xdc,n>>8,n&0xff);v.forEach(x=>_w(x,b));return}if(t==='object'){const ks=Object.keys(v);const n=ks.length;if(n<=15)b.push(0x80|n);else b.push(0xde,n>>8,n&0xff);ks.forEach(k=>{_w(k,b);_w(v[k],b)});return}}return{encode}})()
+
+
 function cacheSet(key, value, ttlMs = 60000) {
   _cache.set(key, { value, expires: Date.now() + ttlMs })
 }
@@ -975,6 +1028,26 @@ async function execOp(line, ctx, server) {
     const exprParts=isNaN(parseInt(p[p.length-1]))?p:p.slice(0,-1)
     let result=evalExpr(exprParts.join(' '),ctx,server)
     if(result===null||result===undefined)result=ctx.vars['inserted']||ctx.vars['updated']||{}
+    // Delta update — only active when client explicitly requests it
+    if (Array.isArray(result) && ctx.req?.headers?.['x-aiplang-delta'] === '1' && result.length > 0) {
+      try {
+        const _req = ctx.req
+        const sid = (_req.headers['x-session-id'] || _req.socket?.remoteAddress || 'default').slice(0,64)
+        const binding = (_req.url?.split('?')[0]?.replace(/^\/api\//,'')?.split('/')[0]) || 'data'
+        const delta = _getDelta(sid, binding, result)
+        if (delta.full) {
+          ctx.res.json(status, result); return '__DONE__'
+        }
+        if (!delta.changed.length && !delta.deleted.length) {
+          ctx.res.json(304, { __delta: true, changed: [], deleted: [], version: delta.version })
+          return '__DONE__'
+        }
+        ctx.res.json(status, { __delta: true, changed: delta.changed, deleted: delta.deleted, version: delta.version })
+        return '__DONE__'
+      } catch(deltaErr) {
+        // Delta failed — fall through to normal response
+      }
+    }
     ctx.res.json(status,result); return '__DONE__'
   }
 
@@ -1244,7 +1317,23 @@ class AiplangServer {
       if (route.method !== req.method) continue
       const match = matchRoute(route.path, req.path); if (!match) continue
       req.params = match
-      res.json    = (s, d) => { if(typeof s==='object'){d=s;s=200}; res.writeHead(s,{'Content-Type':'application/json'}); res.end(JSON.stringify(d)) }
+      res.json    = (s, d) => {
+        if(typeof s==='object'){d=s;s=200}
+        const accept = req.headers['accept']||''
+        const ae     = req.headers['accept-encoding']||''
+        if(accept.includes('application/msgpack')){
+          try{ const buf=_mpEnc.encode(d); res.writeHead(s,{'Content-Type':'application/msgpack','Content-Length':buf.length}); res.end(buf); return }catch{}
+        }
+        const body=JSON.stringify(d)
+        if(ae.includes('gzip')&&body.length>512){
+          require('zlib').gzip(body,(err,buf)=>{
+            if(err){res.writeHead(s,{'Content-Type':'application/json'});res.end(body);return}
+            res.writeHead(s,{'Content-Type':'application/json','Content-Encoding':'gzip'});res.end(buf)
+          })
+        } else {
+          res.writeHead(s,{'Content-Type':'application/json'}); res.end(body)
+        }
+      }
       res.error   = (s, m) => res.json(s, {error:m})
       res.noContent = () => { res.writeHead(204); res.end() }
       res.redirect  = (u) => { res.writeHead(302,{Location:u}); res.end() }
@@ -1839,7 +1928,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.10.7',
+    status:'ok', version:'2.10.8',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,

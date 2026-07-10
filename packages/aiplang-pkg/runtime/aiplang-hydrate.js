@@ -1240,7 +1240,12 @@ function AIPLANG_HYDRATE_SSR(cfg) {
       const method = form.getAttribute('data-fx-method') || 'POST'
       const action = form.getAttribute('data-fx-action') || ''
       const data = {}
-      form.querySelectorAll('input,select,textarea').forEach(i => { if (i.name) data[i.name] = i.value })
+      form.querySelectorAll('input,select,textarea').forEach(i => {
+        if (!i.name) return
+        if (i.type === 'checkbox') data[i.name] = i.checked
+        else if (i.type === 'number') data[i.name] = i.value === '' ? '' : Number(i.value)
+        else data[i.name] = i.value
+      })
       const label = btn ? btn.textContent : ''
       if (btn) { btn.disabled = true; btn.textContent = '...' }
       if (msg) { msg.textContent = ''; msg.className = 'fx-form-msg' }

@@ -91,6 +91,7 @@ sect{Title|Optional body}
 table @list { Col:field | Col:field | edit PUT /api/path/{id} | delete /api/path/{id} | empty: msg }
 form POST /api/path => @list.push($result) { Label:type:placeholder | Label:select:a,b,c }
 form POST /api/path => redirect /dashboard { Label:type | Label:password }
+form POST /api/users from User => redirect /ok   # campos derivados do schema do model (sem chaves)
 pricing{Name>$0/mo>Desc>/path:CTA | Name>$19/mo>Desc>/path:CTA}
 faq{Question?>Answer. | Q2?>A2.}
 testimonial{Name, Role|"Quote."|img:https://url}
@@ -134,38 +135,12 @@ Webhooks auto-handled: checkout.completed → sets user.plan, subscription.delet
 ## Run
 ```bash
 npx aiplang start app.aip    # full-stack
-npx aiplang serve            # frontend dev
+npx aiplang serve            # frontend dev (compila .aip on-request)
 npx aiplang build pages/     # static build
+npx aiplang check app.aip --json   # valida e devolve erros/fix estruturados (para autocorreção do LLM)
 ```
 
-## Customization (v2.8) — React-like props
-
-### Block modifiers (apply to any block)
-```
-hero{...}     variant:left|minimal|tall|dark-cta
-row3{...}     variant:bordered|numbered
-form{...}     variant:inline|minimal
-pricing{...}  variant:compact
-sect{...}     variant:accent|dark|full
-bg:#hexcolor  — background color on any block
-style:{padding:2rem,color:red}  — inline CSS
-```
-
-### New blocks
-```
-card{Title|Subtitle|img:url|/path:Label|#Badge}
-cols2{ left content || right content }
-cols3{ col1 || col2 || col3 }
-divider{Optional label}
-hr{}
-badge{Label text}
-spacer{2rem}
-html{<any>HTML with @state interpolation</any>}
-each @list { template with {item.field} }
-```
-
-### Row colors (per card)
-```
-row3{blue|bolt>Fast>Desc|green|shield>Secure>Desc|red|fire>Hot>Desc}
-# colors: red orange yellow green teal blue indigo purple pink cyan lime amber
-```
+## Notas para geração
+- `form ... from Model` projeta os campos direto do schema do model (tipos email/senha/enum/número/checkbox inferidos). Prefira isto a listar campos à mão.
+- O banco migra sozinho: adicionar um campo a um model existente cria a coluna no próximo `start` (ALTER TABLE). Não precisa DROP.
+- Rode `aiplang check app.aip --json` antes de aplicar: `{ ok, issues:[{line,severity,message,fix,hint}] }`. Corrija até `ok:true`.

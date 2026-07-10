@@ -91,6 +91,7 @@ sect{Title|Optional body}
 table @list { Col:field | Col:field | edit PUT /api/path/{id} | delete /api/path/{id} | empty: msg }
 form POST /api/path => @list.push($result) { Label:type:placeholder | Label:select:a,b,c }
 form POST /api/path => redirect /dashboard { Label:type | Label:password }
+form POST /api/users from User => redirect /ok   # campos derivados do schema do model (sem chaves)
 pricing{Name>$0/mo>Desc>/path:CTA | Name>$19/mo>Desc>/path:CTA}
 faq{Question?>Answer. | Q2?>A2.}
 testimonial{Name, Role|"Quote."|img:https://url}
@@ -134,6 +135,12 @@ Webhooks auto-handled: checkout.completed → sets user.plan, subscription.delet
 ## Run
 ```bash
 npx aiplang start app.aip    # full-stack
-npx aiplang serve            # frontend dev
+npx aiplang serve            # frontend dev (compila .aip on-request)
 npx aiplang build pages/     # static build
+npx aiplang check app.aip --json   # valida e devolve erros/fix estruturados (para autocorreção do LLM)
 ```
+
+## Notas para geração
+- `form ... from Model` projeta os campos direto do schema do model (tipos email/senha/enum/número/checkbox inferidos). Prefira isto a listar campos à mão.
+- O banco migra sozinho: adicionar um campo a um model existente cria a coluna no próximo `start` (ALTER TABLE). Não precisa DROP.
+- Rode `aiplang check app.aip --json` antes de aplicar: `{ ok, issues:[{line,severity,message,fix,hint}] }`. Corrija até `ok:true`.

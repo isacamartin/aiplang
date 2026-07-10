@@ -1163,6 +1163,7 @@ function AIPLANG_HYDRATE_SSR(cfg) {
   }
 
   // Preenche as tabelas ligadas a um @binding com os dados recebidos
+  const _emptyRow = new WeakMap() // guarda o estado "vazio" original de cada tbody
   function fillTargets(name, data) {
     const rows = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : [])
     const sel = `table[data-fx-table="@${name}"],table[data-fx-table="${name}"]`
@@ -1171,8 +1172,8 @@ function AIPLANG_HYDRATE_SSR(cfg) {
       const delPath = table.getAttribute('data-fx-delete')
       const tbody = table.querySelector('tbody')
       if (!tbody) return
-      const span = cols.length + (delPath ? 1 : 0)
-      if (!rows.length) return // mantém a linha "empty" do SSR
+      if (!_emptyRow.has(tbody)) _emptyRow.set(tbody, tbody.innerHTML) // snapshot do SSR
+      if (!rows.length) { tbody.innerHTML = _emptyRow.get(tbody); return } // restaura "vazio"
       tbody.innerHTML = rows.map(r => {
         const tds = cols.map(c => `<td class="fx-td">${escHtml(r[c])}</td>`).join('')
         const act = delPath
@@ -1239,7 +1240,12 @@ function AIPLANG_HYDRATE_SSR(cfg) {
       const method = form.getAttribute('data-fx-method') || 'POST'
       const action = form.getAttribute('data-fx-action') || ''
       const data = {}
-      form.querySelectorAll('input,select,textarea').forEach(i => { if (i.name) data[i.name] = i.value })
+      form.querySelectorAll('input,select,textarea').forEach(i => {
+        if (!i.name) return
+        if (i.type === 'checkbox') data[i.name] = i.checked
+        else if (i.type === 'number') data[i.name] = i.value === '' ? '' : Number(i.value)
+        else data[i.name] = i.value
+      })
       const label = btn ? btn.textContent : ''
       if (btn) { btn.disabled = true; btn.textContent = '...' }
       if (msg) { msg.textContent = ''; msg.className = 'fx-form-msg' }

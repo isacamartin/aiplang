@@ -793,12 +793,75 @@ if (cmd==='types'||cmd==='type'||cmd==='dts') {
   process.exit(0)
 }
 
+// Checagens semânticas cruzadas (usa o parseApp do servidor): referências de
+// `form ... from Model`, endpoints de form/mount que apontam pra rotas inexistentes.
+// Erros que só aparecem em runtime viram feedback estruturado pro gerador (LLM).
+function semanticChecks(src) {
+  const out = []
+  let app
+  try { app = require(require('path').join(__dirname,'../server/server.js')).parseApp(src) }
+  catch { return out }
+  const modelNames = new Set((app.models||[]).map(m=>m.name))
+  const routes = new Set((app.apis||[]).map(a=>`${a.method} ${a.path}`))
+  const routePaths = new Set((app.apis||[]).map(a=>a.path))
+  // Rotas geradas automaticamente (não são blocos api) — não avisar sobre elas
+  const AUTO_ROUTE = /^\/api\/(stripe|s3|upload|uploads|auth\/refresh|webhook)/
+  const isAutoRoute = p => AUTO_ROUTE.test(p)
+  const lines = src.split('\n')
+  const lineOf = (needle) => { const i = lines.findIndex(l=>l.includes(needle)); return i>=0?i+1:null }
+
+  for (const page of (app.pages||[])) {
+    for (const b of (page.blocks||[])) {
+      const line = b.rawLine || ''
+      // form ... from Model  → Model precisa existir
+      const fm = line.match(/\bfrom\s+(\w+)/)
+      if (b.kind==='form' && fm && !modelNames.has(fm[1])) {
+        out.push({ line: lineOf(line), severity:'error', code: line.trim(),
+          message:`form referencia model inexistente: '${fm[1]}'`,
+          fix:`Defina 'model ${fm[1]} { ... }' ou use um model existente (${[...modelNames].join(', ')||'nenhum'})`,
+          hint:'form <MÉTODO> <rota> from <Model> deriva os campos do schema do model.' })
+      }
+      // form action / mount → a rota precisa existir
+      if (b.kind==='form') {
+        const p = line.match(/\bform\s+(\w+)\s+(\S+)/)
+        if (p && p[2].startsWith('/') && !routes.has(`${p[1]} ${p[2]}`) && !routePaths.has(p[2]) && !isAutoRoute(p[2])) {
+          out.push({ line: lineOf(line), severity:'warning', code: line.trim(),
+            message:`form envia para rota não declarada: ${p[1]} ${p[2]}`,
+            fix:`Crie 'api ${p[1]} ${p[2]} { ... }'`, hint:'O endpoint do form precisa existir como bloco api.' })
+        }
+      }
+    }
+    for (const q of (page.queries||[])) {
+      if (q.path && q.path.startsWith('/') && !routePaths.has(q.path) && !isAutoRoute(q.path)) {
+        out.push({ line: lineOf(q.path), severity:'warning', code:`~${q.trigger} ${q.method||'GET'} ${q.path}`,
+          message:`~${q.trigger} aponta para rota não declarada: ${q.path}`,
+          fix:`Crie 'api ${q.method||'GET'} ${q.path} { ... }'`, hint:'~mount/~interval consomem um endpoint api existente.' })
+      }
+    }
+  }
+  return out
+}
+
 if (cmd==='validate'||cmd==='check'||cmd==='lint') {
-  const file = args[0]
-  if (!file) { console.error('\n  Usage: aiplang validate <app.aip>\n'); process.exit(1) }
+  const wantJson = args.includes('--json')
+  const file = args.find(a => !a.startsWith('--'))
+  if (!file) { console.error('\n  Usage: aiplang check <app.aip> [--json]\n'); process.exit(1) }
   if (!require('fs').existsSync(file)) { console.error(`\n  ✗  File not found: ${file}\n`); process.exit(1) }
   const src = require('fs').readFileSync(file,'utf8')
-  const errs = validateAipSrc(src)
+  const errs = [...validateAipSrc(src), ...semanticChecks(src)].sort((a,b)=>(a.line||0)-(b.line||0))
+  const hasError = errs.some(e=>e.severity==='error')
+
+  // --json: saída estruturada e estável, consumível por LLM para autocorreção
+  if (wantJson) {
+    console.log(JSON.stringify({
+      file,
+      ok: !hasError,
+      counts: { errors: errs.filter(e=>e.severity==='error').length, warnings: errs.filter(e=>e.severity!=='error').length },
+      issues: errs.map(e=>({ line:e.line, severity:e.severity, code:e.code, message:e.message, fix:e.fix||null, hint:e.hint||null })),
+    }, null, 2))
+    process.exit(hasError ? 1 : 0)
+  }
+
   if (!errs.length) { console.log('\n  ✓  Syntax OK — safe to run\n'); process.exit(0) }
   console.log(`\n  ✗  ${errs.length} issue(s) found in ${file}:\n`)
   errs.forEach(e => {
@@ -806,9 +869,10 @@ if (cmd==='validate'||cmd==='check'||cmd==='lint') {
     console.log(`  ${icon}  Line ${e.line}: ${e.message}`)
     console.log(`       ${e.code}`)
     if (e.fix) console.log(`     Fix: ${e.fix}`)
+    if (e.hint) console.log(`     Hint: ${e.hint}`)
   })
   console.log()
-  process.exit(errs.some(e=>e.severity==='error') ? 1 : 0)
+  process.exit(hasError ? 1 : 0)
 }
 
 if (cmd==='context'||cmd==='ctx') {

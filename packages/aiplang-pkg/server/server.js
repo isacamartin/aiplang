@@ -694,6 +694,15 @@ const MODEL_DEFS = {}
 function toTable(name) { return name.toLowerCase().replace(/([A-Z])/g,'_$1').replace(/^_/,'') + 's' }
 function toCol(field) { return field.replace(/([A-Z])/g,'_$1').toLowerCase() }
 
+// Normaliza um valor pra bind SQL. SQLite/MySQL não aceitam boolean nem
+// objeto — vira 0/1 e JSON. Postgres é tipado, então mantém o valor nativo.
+function bindVal(v) {
+  if (_pgPool) return v
+  if (typeof v === 'boolean') return v ? 1 : 0
+  if (v !== null && typeof v === 'object') return JSON.stringify(v)
+  return v
+}
+
 // SQL identifiers (column/table names) can never be parameterized — they must
 // match this strict pattern before being interpolated into a query.
 const SAFE_IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/
@@ -897,7 +906,7 @@ class Model {
       _mongoDB.collection(this.tableName).insertOne({ ...row }).catch(e => console.debug('[aiplang:mongo]', e?.message))
       return row
     }
-    dbRun(`INSERT INTO ${this.tableName} (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`, vals)
+    dbRun(`INSERT INTO ${this.tableName} (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`, vals.map(bindVal))
     emit(`${this.modelName}.created`, row)
     return row
   }
@@ -916,7 +925,7 @@ class Model {
     for (const k of Object.keys(row)) if (!SAFE_IDENT.test(k)) delete row[k]
     if (this.timestamps) row.updated_at = now()
     const sets = Object.keys(row).map(k => `${k} = ?`).join(', ')
-    dbRun(`UPDATE ${this.tableName} SET ${sets} WHERE id = ?`, [...Object.values(row), id])
+    dbRun(`UPDATE ${this.tableName} SET ${sets} WHERE id = ?`, [...Object.values(row).map(bindVal), id])
     const updated = this.find(id)
     emit(`${this.modelName}.updated`, updated)
     return updated
@@ -984,6 +993,23 @@ class Model {
 // ═══════════════════════════════════════════════════════════════════
 // MIGRATION
 // ═══════════════════════════════════════════════════════════════════
+// Adiciona colunas faltantes (ALTER TABLE ADD COLUMN) — só SQLite por ora.
+// ADD COLUMN nunca é NOT NULL/UNIQUE inline (SQLite proíbe em tabela populada);
+// unicidade continua vindo do índice criado separadamente.
+function migrateAddColumns(table, desired) {
+  if (_pgPool || _mysqlPool || _useMongo || !_db) return
+  let existing
+  try { existing = dbAll(`PRAGMA table_info(${table})`).map(r => r.name) } catch { return }
+  if (!existing || !existing.length) return
+  for (const [name, spec] of Object.entries(desired)) {
+    if (existing.includes(name)) continue
+    let ddl = `ALTER TABLE ${table} ADD COLUMN ${name} ${spec.sqlType}`
+    if (spec.default != null) ddl += ` DEFAULT '${String(spec.default).replace(/'/g,"''")}'`
+    try { dbRun(ddl); console.log(`[aiplang] +  ${table}.${name} (coluna adicionada)`) }
+    catch (e) { console.warn('[aiplang] migração falhou:', table, name, e.message) }
+  }
+}
+
 function migrateModels(models) {
   // ── Seleção de mapa de tipos por banco ───────────────────────────
   const _sqliteTypes = { uuid:'TEXT',int:'INTEGER',integer:'INTEGER',float:'REAL',bool:'INTEGER',timestamp:'TEXT',date:'TEXT',json:'TEXT',enum:'TEXT',text:'TEXT',email:'TEXT',url:'TEXT',phone:'TEXT' }
@@ -1030,6 +1056,17 @@ function migrateModels(models) {
     if (!cols.some(c=>c.startsWith('updated_at'))) cols.push('updated_at TEXT')
     if (model.softDelete) { if (!cols.some(c=>c.startsWith('deleted_at'))) cols.push('deleted_at TEXT') }
     try { dbRun(`CREATE TABLE IF NOT EXISTS ${table} (${cols.join(', ')})`) } catch {}
+
+    // ── Migração automática: adiciona colunas de campos novos ──────
+    // Sem isto, adicionar um campo a um model existente perdia o dado
+    // em silêncio (só havia CREATE TABLE IF NOT EXISTS).
+    const desired = {}
+    for (const f of model.fields) desired[toCol(f.name)] = { sqlType: typeMap[f.type] || 'TEXT', default: f.default }
+    for (const rel of model.relationships || []) if (rel.type === 'belongsTo') desired[rel.model.toLowerCase()+'_id'] = { sqlType:'TEXT', default:null }
+    desired['created_at'] = { sqlType:'TEXT', default:null }
+    desired['updated_at'] = { sqlType:'TEXT', default:null }
+    if (model.softDelete) desired['deleted_at'] = { sqlType:'TEXT', default:null }
+    migrateAddColumns(table, desired)
     // Auto-index on unique + indexed fields
     for (const f of model.fields) {
       const colName = toCol(f.name)
@@ -1093,7 +1130,17 @@ function parseApp(src) {
 
     if (line.startsWith('model ')) {
       if (inModel && curModel) app.models.push(curModel)
-      curModel = { name: line.slice(6).replace('{','').trim(), fields:[], relationships:[], hooks:[], softDelete:false }
+      // Nome = primeiro token após "model "; robusto a `model User {` com
+      // um campo na mesma linha (o restante após `{` vira um campo).
+      const rest = line.slice(6).trim()
+      const name = rest.split(/[\s{]/)[0]
+      curModel = { name, fields:[], relationships:[], hooks:[], softDelete:false }
+      const bi = line.indexOf('{')
+      if (bi !== -1) {
+        const after = line.slice(bi+1).replace(/}\s*$/,'').trim()
+        if (after) { try { curModel.fields.push(after.includes(' : ')||after.split(':').length>2?parseField(after):parseFieldCompact(after)) } catch {} }
+        if (/}\s*$/.test(line)) { app.models.push(curModel); curModel=null; inModel=false; i++; continue }
+      }
       inModel=true; inAPI=false; i++; continue
     }
     if (inModel && line === '}') { if (curModel) app.models.push(curModel); curModel=null; inModel=false; i++; continue }
@@ -1254,10 +1301,12 @@ const f={name:p[0],type:_normaliseType(p[1]),modifiers:[],enumVals:[],default:nu
     // Support both pipe (status:enum:a|b|c) and colon (status:enum:a,b,c)
     const rawVals = p.slice(2).find(x => x && !x.startsWith('default=') && !['required','unique','hashed','pk','auto','index'].includes(x))
     if (rawVals) f.enumVals = rawVals.includes('|') ? rawVals.split('|').map(v=>v.trim()) : rawVals.split(',').map(v=>v.trim())
-    for(let j=3;j<p.length;j++){const x=p[j];if(x.startsWith('default='))f.default=x.slice(8);else if(x)f.modifiers.push(x)}
+    // Um segmento pode conter vários modificadores separados por espaço
+    // (ex: "required unique") — tokeniza antes de classificar
+    for(let j=3;j<p.length;j++)for(const x of (p[j]||'').split(/\s+/)){if(!x)continue;if(x.startsWith('default='))f.default=x.slice(8);else if(!f.enumVals.includes(x))f.modifiers.push(x)}
   } else {
-    for(let j=2;j<p.length;j++){
-      const x=p[j]; if(!x) continue
+    for(let j=2;j<p.length;j++)for(const x of (p[j]||'').split(/\s+/)){
+      if(!x) continue
       if(x.startsWith('default='))      f.default=x.slice(8)
       else if(x.startsWith('enum:'))    f.enumVals=x.slice(5).includes('|')?x.slice(5).split('|').map(v=>v.trim()):x.slice(5).split(',').map(v=>v.trim())
       else if(x.startsWith('min='))     f.constraints.min=Number(x.slice(4))
@@ -1266,7 +1315,7 @@ const f={name:p[0],type:_normaliseType(p[1]),modifiers:[],enumVals:[],default:nu
       else if(x.startsWith('maxLen='))  f.constraints.maxLen=Number(x.slice(7))
       else if(x.startsWith('format='))  f.constraints.format=x.slice(7)
       else if(x.startsWith('pattern=')) f.constraints.pattern=x.slice(8)
-      else if(x)                        f.modifiers.push(x)
+      else                              f.modifiers.push(x)
     }
   }
   return f
@@ -1318,8 +1367,9 @@ function parseFrontPage(src) {
   return p
 }
 // O tipo do bloco é a PRIMEIRA palavra antes do '{' — blocos como
-// `form POST /x {` ou `table @y {` têm argumentos depois do nome
-function blockKind(line){const bi=line.indexOf('{');if(bi===-1)return'unknown';const first=line.slice(0,bi).trim().split(/\s+/)[0];const m=first.match(/^([a-z]+)\d+$/);return m?m[1]:first}
+// `form POST /x {` ou `table @y {` têm argumentos depois do nome.
+// `form ... from Model` pode vir sem chaves (campos derivados do model).
+function blockKind(line){const bi=line.indexOf('{');if(bi===-1){const w=line.trim().split(/\s+/)[0];return w==='form'?'form':'unknown'}const first=line.slice(0,bi).trim().split(/\s+/)[0];const m=first.match(/^([a-z]+)\d+$/);return m?m[1]:first}
 
 // ═══════════════════════════════════════════════════════════════════
 // ROUTE COMPILER
@@ -2096,7 +2146,52 @@ const FIELD_NAME_BY_TYPE = { email: 'email', password: 'password' }
 function slugField(s){ return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'') }
 function fieldName(label, type){ return FIELD_NAME_BY_TYPE[type] || slugField(label) }
 function rTable(line){const bi=line.indexOf('{'),binding=line.slice(6,bi).trim(),content=extractBody(line),em=content.match(/edit\s+(PUT|PATCH)\s+(\S+)/),dm=content.match(/delete\s+(?:DELETE\s+)?(\S+)/);const clean=content.replace(/edit\s+(PUT|PATCH)\s+\S+/g,'').replace(/delete\s+(?:DELETE\s+)?\S+/g,'');const cols=clean.split('|').map(c=>{c=c.trim();if(c.startsWith('empty:')||!c)return null;const[l,k]=c.split(':').map(x=>x.trim());return k?{label:l,key:k}:null}).filter(Boolean);const emptyMsg=clean.match(/empty:\s*([^|]+)/)?.[1]||'No data.';const ths=cols.map(c=>`<th class="fx-th">${esc(c.label)}</th>`).join('');const at=(em||dm)?'<th class="fx-th fx-th-actions">Actions</th>':'';return`<div class="fx-table-wrap"><table class="fx-table" data-fx-table="${esc(binding)}" data-fx-cols='${JSON.stringify(cols.map(c=>c.key))}'${em?` data-fx-edit="${esc(em[2])}" data-fx-edit-method="${esc(em[1])}"`  :''  }${dm?` data-fx-delete="${esc(dm[1])}"`  :''  }><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${cols.length+(em||dm?1:0)}" class="fx-td-empty">${esc(emptyMsg)}</td></tr></tbody></table></div>\n`}
-function rForm(line){const bi=line.indexOf('{');let head=line.slice(5,bi).trim(),action='',method='POST',bpath='#';const ai=head.indexOf('=>');if(ai!==-1){action=head.slice(ai+2).trim();head=head.slice(0,ai).trim()};const pts=head.split(/\s+/);method=pts[0]||'POST';bpath=pts[1]||'#';const fields=extractBody(line).split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());if(!label)return'';const name=fieldName(label,type);let inp;if(type==='select'){const opts=(ph||'').split(',').map(o=>o.trim()).filter(Boolean);inp=`<select class="fx-input" name="${esc(name)}">${opts.length?opts.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join(''):'<option value="">Selecione...</option>'}</select>`}else if(type==='textarea'){inp=`<textarea class="fx-input" name="${esc(name)}" placeholder="${esc(ph||'')}"></textarea>`}else{inp=`<input class="fx-input" type="${esc(type||'text')}" name="${esc(name)}" placeholder="${esc(ph||'')}">`}return`<div class="fx-field"><label class="fx-label">${esc(label)}</label>${inp}</div>`}).join('');return`<div class="fx-form-wrap"><form class="fx-form" data-fx-form="${esc(bpath)}" data-fx-method="${esc(method)}" data-fx-action="${esc(action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">Submit</button></form></div>\n`}
+// Deriva os campos de um form a partir do schema do model (AI-first: o form
+// é uma projeção do model, o LLM não precisa adivinhar nomes/tipos de campo)
+function deriveFieldsFromModel(modelName){
+  const def=MODEL_DEFS[modelName]; if(!def||!def.schema)return null
+  const skip=new Set(['id','created_at','updated_at','deleted_at'])
+  const out=[]
+  for(const [col,d] of Object.entries(def.schema)){
+    if(skip.has(col))continue
+    const label=col.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())
+    let type='text', options=[]
+    if(d.hashed)type='password'
+    else if(d.type==='email'||col==='email')type='email'
+    else if(d.type==='url')type='url'
+    else if(d.type==='int'||d.type==='float')type='number'
+    else if(d.type==='bool')type='checkbox'
+    else if(d.type==='date')type='date'
+    else if(d.type==='timestamp')type='datetime-local'
+    else if(d.type==='enum'){type='select';options=d.enumVals||[]}
+    out.push({label,type,name:col,placeholder:'',options})
+  }
+  return out
+}
+function renderFieldSpec(fs){
+  const name=fs.name
+  let inp
+  if(fs.type==='select'){const opts=fs.options||[];inp=`<select class="fx-input" name="${esc(name)}">${opts.length?opts.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join(''):'<option value="">Selecione...</option>'}</select>`}
+  else if(fs.type==='textarea'){inp=`<textarea class="fx-input" name="${esc(name)}" placeholder="${esc(fs.placeholder||'')}"></textarea>`}
+  else if(fs.type==='checkbox'){inp=`<input class="fx-check" type="checkbox" name="${esc(name)}">`}
+  else{inp=`<input class="fx-input" type="${esc(fs.type||'text')}" name="${esc(name)}" placeholder="${esc(fs.placeholder||'')}">`}
+  return `<div class="fx-field"><label class="fx-label">${esc(fs.label)}</label>${inp}</div>`
+}
+function rForm(line){
+  const bi=line.indexOf('{')
+  let head=(bi===-1?line.slice(5):line.slice(5,bi)).trim(),action='',method='POST',bpath='#'
+  const ai=head.indexOf('=>');if(ai!==-1){action=head.slice(ai+2).trim();head=head.slice(0,ai).trim()}
+  // `form POST /api/x from Model { ... }` — Model informa a projeção dos campos
+  let fromModel=null;const fm=head.match(/\bfrom\s+(\w+)/);if(fm){fromModel=fm[1];head=head.replace(/\bfrom\s+\w+/,'').trim()}
+  const pts=head.split(/\s+/);method=pts[0]||'POST';bpath=pts[1]||'#'
+  const bodyRaw=extractBody(line).trim()
+  let specs
+  if(bodyRaw){
+    specs=bodyRaw.split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());if(!label)return null;return{label,type:type||'text',name:fieldName(label,type),placeholder:ph||'',options:type==='select'?(ph||'').split(',').map(o=>o.trim()).filter(Boolean):[]}}).filter(Boolean)
+  } else if(fromModel){ specs=deriveFieldsFromModel(fromModel)||[] } else specs=[]
+  const fields=specs.map(renderFieldSpec).join('')
+  return`<div class="fx-form-wrap"><form class="fx-form" data-fx-form="${esc(bpath)}" data-fx-method="${esc(method)}" data-fx-action="${esc(action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">Enviar</button></form></div>\n`
+}
 function rPricing(line){const plans=extractBody(line).split('|').map(p=>{const pts=p.trim().split('>').map(x=>x.trim());return{name:pts[0],price:pts[1],desc:pts[2],linkRaw:pts[3]}}).filter(p=>p.name);const cards=plans.map((p,i)=>{let lh='#',ll='Get started';if(p.linkRaw){const m=p.linkRaw.match(/\/([^:]+):(.+)/);if(m){lh='/'+m[1];ll=m[2]}};return`<div class="fx-pricing-card${i===1?' fx-pricing-featured':''}">${i===1?'<div class="fx-pricing-badge">Most popular</div>':''}<div class="fx-pricing-name">${esc(p.name)}</div><div class="fx-pricing-price">${esc(p.price)}</div><p class="fx-pricing-desc">${esc(p.desc)}</p><a href="${esc(lh)}" class="fx-cta fx-pricing-cta">${esc(ll)}</a></div>`}).join('');return`<div class="fx-pricing">${cards}</div>\n`}
 function rFaq(line){const items=extractBody(line).split('|').map(i=>{const idx=i.indexOf('>');return{q:i.slice(0,idx).trim(),a:i.slice(idx+1).trim()}}).filter(i=>i.q);return`<section class="fx-sect"><div class="fx-faq">${items.map(i=>`<div class="fx-faq-item" onclick="this.classList.toggle('open')"><div class="fx-faq-q">${esc(i.q)}<span class="fx-faq-arrow">▸</span></div><div class="fx-faq-a">${esc(i.a)}</div></div>`).join('')}</div></section>\n`}
 function rTestimonial(line){const parts=extractBody(line).split('|').map(x=>x.trim());const imgPart=parts.find(p=>p.startsWith('img:'));const img=imgPart?`<img src="${esc(imgPart.slice(4))}" class="fx-testi-img" alt="${esc(parts[0])}" loading="lazy">`:`<div class="fx-testi-avatar">${esc((parts[0]||'?').charAt(0))}</div>`;return`<section class="fx-testi-wrap"><div class="fx-testi">${img}<blockquote class="fx-testi-quote">"${esc(parts[1]?.replace(/^"|"$/g,''))}"</blockquote><div class="fx-testi-author">${esc(parts[0])}</div></div></section>\n`}

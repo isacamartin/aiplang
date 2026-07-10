@@ -1,4 +1,20 @@
 
+// ─────────────────────────────────────────────────────────────
+// AUTH — contrato único de fetch para TODA a runtime (client-render e
+// hidratação SSR usam o mesmo helper). Guarda o JWT e injeta Authorization.
+// Antes só a hidratação SSR era auth-aware; o client-render não mandava token.
+// ─────────────────────────────────────────────────────────────
+var AIPLANG_TOKEN_KEY = 'aiplang_token'
+function aiplangGetToken() { try { return localStorage.getItem(AIPLANG_TOKEN_KEY) } catch { return null } }
+function aiplangSetToken(t) { try { t ? localStorage.setItem(AIPLANG_TOKEN_KEY, t) : localStorage.removeItem(AIPLANG_TOKEN_KEY) } catch {} }
+function aiplangApiFetch(path, opts) {
+  opts = opts || {}
+  opts.headers = opts.headers || {}
+  const t = aiplangGetToken()
+  if (t && !opts.headers['Authorization']) opts.headers['Authorization'] = 'Bearer ' + t
+  return fetch(path, opts)
+}
+
 // _fastEq: comparação rápida sem JSON.stringify (O(1) para primitivos, O(n) para arrays)
 function _fastEq(a, b) {
   if (a === b) return true
@@ -200,7 +216,7 @@ class QueryEngine {
     if (q.body) opts.body = JSON.stringify(q.body)
 
     try {
-      const res = await fetch(path, opts)
+      const res = await aiplangApiFetch(path, opts)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       this._applyResult(data, q.target, q.action)
@@ -840,7 +856,7 @@ class Renderer {
 
       const path = this.state.resolve(block.path)
       try {
-        const res = await fetch(path, {
+        const res = await aiplangApiFetch(path, {
           method: block.method,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),
@@ -853,6 +869,7 @@ class Renderer {
           btn.textContent = 'Submit'
           return
         }
+        if (result && result.token) aiplangSetToken(result.token)
         if (block.action) {
           const qe = new QueryEngine(this.state)
           qe._applyResult(result, null, block.action)
@@ -1151,16 +1168,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // forms/tabelas/logout. Sem isto, forms caem em submit nativo (GET).
 // ─────────────────────────────────────────────────────────────
 function AIPLANG_HYDRATE_SSR(cfg) {
-  const TOKEN_KEY = 'aiplang_token'
-  const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) } catch { return null } }
-  const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch {} }
+  // Contrato de auth único (compartilhado com o client-render)
+  const getToken = aiplangGetToken, setToken = aiplangSetToken, api = aiplangApiFetch
   const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
-  async function api(path, opts = {}) {
-    opts.headers = opts.headers || {}
-    const t = getToken()
-    if (t) opts.headers['Authorization'] = 'Bearer ' + t
-    return fetch(path, opts)
-  }
 
   // Preenche as tabelas ligadas a um @binding com os dados recebidos
   const _emptyRow = new WeakMap() // guarda o estado "vazio" original de cada tbody

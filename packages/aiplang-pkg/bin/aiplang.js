@@ -839,6 +839,20 @@ function semanticChecks(src) {
       }
     }
   }
+
+  // Endpoint incompleto: sem return e sem operação de dados (insert/update/delete)
+  const DATA_OP = /^(insert|update|delete|restore)\s/
+  for (const a of (app.apis||[])) {
+    const body = a.body || []
+    const hasReturn = body.some(l => /^return\b/.test(l.trim()))
+    const hasData = body.some(l => DATA_OP.test(l.trim()))
+    if (!hasReturn && !hasData) {
+      out.push({ line: lineOf(`${a.method} ${a.path}`), severity:'warning', code:`api ${a.method} ${a.path}`,
+        message:`endpoint sem retorno nem operação de dados: ${a.method} ${a.path}`,
+        fix:`Adicione um 'return ...' (ou insert/update/delete) como última operação`,
+        hint:'Todo api deve terminar com return; operações de dados vêm antes.' })
+    }
+  }
   return out
 }
 

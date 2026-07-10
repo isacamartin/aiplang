@@ -810,6 +810,7 @@ class Model {
     this.softDelete = this.def.softDelete || false
     this.timestamps = this.def.timestamps !== false
     this.schema     = this.def.schema || null
+    this.ownerFk    = this.def.ownerFk || null  // FK do dono (~belongs no user)
   }
 
   // ── Core queries ────────────────────────────────────────────────
@@ -830,6 +831,8 @@ class Model {
     let sql = `SELECT * FROM ${this.tableName}`
     const params = [], conditions = []
     if (this.softDelete) conditions.push('deleted_at IS NULL')
+    // Escopo por dono: só as linhas do usuário autenticado
+    if (opts.ownerId != null && this.ownerFk) { conditions.push(`${this.ownerFk} = ?`); params.push(opts.ownerId) }
     if (opts.where) { conditions.push(opts.where); if (opts.whereParams) params.push(...opts.whereParams) }
     if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`
     if (opts.order) {
@@ -911,7 +914,7 @@ class Model {
     return row
   }
 
-  update(id, data) {
+  update(id, data, ownerId) {
     // Validate + coerce update payload
     const validated = validateAndCoerce(data, this.schema)
     if (!validated.ok) {
@@ -922,21 +925,28 @@ class Model {
     }
     const row = { ...validated.data }
     delete row.id; delete row.created_at; delete row.password
+    // Não deixa reatribuir o dono via update
+    if (this.ownerFk) delete row[this.ownerFk]
     for (const k of Object.keys(row)) if (!SAFE_IDENT.test(k)) delete row[k]
     if (this.timestamps) row.updated_at = now()
     const sets = Object.keys(row).map(k => `${k} = ?`).join(', ')
-    dbRun(`UPDATE ${this.tableName} SET ${sets} WHERE id = ?`, [...Object.values(row).map(bindVal), id])
+    // Escopo por dono: só atualiza se a linha pertencer ao usuário (anti-IDOR)
+    let where = 'id = ?', params = [...Object.values(row).map(bindVal), id]
+    if (ownerId != null && this.ownerFk) { where += ` AND ${this.ownerFk} = ?`; params.push(ownerId) }
+    dbRun(`UPDATE ${this.tableName} SET ${sets} WHERE ${where}`, params)
     const updated = this.find(id)
     emit(`${this.modelName}.updated`, updated)
     return updated
   }
 
-  delete(id) {
+  delete(id, ownerId) {
+    const ownerCond = (ownerId != null && this.ownerFk) ? ` AND ${this.ownerFk} = ?` : ''
+    const ownerP = ownerCond ? [ownerId] : []
     if (this.softDelete) {
-      dbRun(`UPDATE ${this.tableName} SET deleted_at = ?, updated_at = ? WHERE id = ?`, [now(), now(), id])
+      dbRun(`UPDATE ${this.tableName} SET deleted_at = ?, updated_at = ? WHERE id = ?${ownerCond}`, [now(), now(), id, ...ownerP])
       emit(`${this.modelName}.softDeleted`, { id })
     } else {
-      dbRun(`DELETE FROM ${this.tableName} WHERE id = ?`, [id])
+      dbRun(`DELETE FROM ${this.tableName} WHERE id = ?${ownerCond}`, [id, ...ownerP])
       emit(`${this.modelName}.deleted`, { id })
     }
   }
@@ -949,11 +959,12 @@ class Model {
 
   count(opts = {}) {
     let sql = `SELECT COUNT(*) as count FROM ${this.tableName}`
-    const conditions = []
+    const conditions = [], params = []
     if (this.softDelete) conditions.push('deleted_at IS NULL')
+    if (opts.ownerId != null && this.ownerFk) { conditions.push(`${this.ownerFk} = ?`); params.push(opts.ownerId) }
     if (opts.where) conditions.push(opts.where)
     if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`
-    return dbGet(sql)?.count || 0
+    return dbGet(sql, params)?.count || 0
   }
 
   sum(field, opts = {}) {
@@ -1010,7 +1021,16 @@ function migrateAddColumns(table, desired) {
   }
 }
 
+// Modelo de usuário do auth = o que tem senha hasheada (ou chamado "User").
+// Recursos que ~belongs nele são escopados ao dono automaticamente.
+let _userModelName = 'User'
+function detectUserModel(models) {
+  const withPass = models.find(m => (m.fields||[]).some(f => f.modifiers?.includes('hashed')))
+  _userModelName = withPass?.name || (models.find(m=>m.name==='User')?.name) || 'User'
+}
+
 function migrateModels(models) {
+  detectUserModel(models)
   // ── Seleção de mapa de tipos por banco ───────────────────────────
   const _sqliteTypes = { uuid:'TEXT',int:'INTEGER',integer:'INTEGER',float:'REAL',bool:'INTEGER',timestamp:'TEXT',date:'TEXT',json:'TEXT',enum:'TEXT',text:'TEXT',email:'TEXT',url:'TEXT',phone:'TEXT' }
   const _mysqlTypes  = { uuid:'VARCHAR(36)',int:'INT',integer:'INT',float:'DOUBLE',bool:'TINYINT(1)',timestamp:'DATETIME',date:'DATE',json:'JSON',enum:'TEXT',text:'TEXT',email:'VARCHAR(255)',url:'TEXT',phone:'VARCHAR(20)' }
@@ -1076,6 +1096,11 @@ function migrateModels(models) {
     }
     // Always index created_at for pagination performance
     try { dbRun(`CREATE INDEX IF NOT EXISTS idx_${table}_created_at ON ${table}(created_at)`) } catch {}
+    // Index no FK do dono (leituras escopadas por usuário)
+    for (const rel of model.relationships || []) if (rel.type === 'belongsTo') {
+      const fk = `${rel.model.toLowerCase()}_id`
+      try { dbRun(`CREATE INDEX IF NOT EXISTS idx_${table}_${fk} ON ${table}(${fk})`) } catch {}
+    }
     console.log(`[aiplang] ✓  ${table} (${cols.length} cols${model.softDelete ? ', soft-delete' : ''})`)
     // Store full schema for runtime validation
     const schema = {}
@@ -1089,7 +1114,10 @@ function migrateModels(models) {
         default: f.default,
       }
     }
-    MODEL_DEFS[model.name] = { softDelete: model.softDelete, timestamps: true, schema }
+    // FK do dono: existe se o model ~belongs no model de usuário do auth
+    const ownsUser = (model.relationships||[]).some(r => r.type==='belongsTo' && r.model === _userModelName)
+    const ownerFk = ownsUser ? `${_userModelName.toLowerCase()}_id` : null
+    MODEL_DEFS[model.name] = { softDelete: model.softDelete, timestamps: true, schema, ownerFk }
   }
 }
 
@@ -1518,7 +1546,10 @@ async function execOp(line, ctx, server) {
     const modelName=line.match(/insert\s+(\w+)/)?.[1]; const m=server.models[modelName]
     if (m) {
       try {
-        ctx.vars['inserted'] = m.create({...ctx.body})
+        // Dono automático: recurso que ~belongs no user recebe o id do autenticado
+        const body = {...ctx.body}
+        if (m.ownerFk && ctx.user?.id && body[m.ownerFk] == null) body[m.ownerFk] = ctx.user.id
+        ctx.vars['inserted'] = m.create(body)
         _cacheInvalidate(modelName.toLowerCase())  // invalidate read cache
         broadcast(modelName.toLowerCase(), {action:'created',data:ctx.vars['inserted']})
         return ctx.vars['inserted']
@@ -1536,7 +1567,9 @@ async function execOp(line, ctx, server) {
     if (m) {
       try {
         const id=ctx.params.id||ctx.vars['id']
-        ctx.vars['updated'] = m.update(id,{...ctx.body})
+        const ownerId=(m.ownerFk && ctx.user?.id)?ctx.user.id:null
+        ctx.vars['updated'] = m.update(id,{...ctx.body},ownerId)
+        _cacheInvalidate(modelName.toLowerCase())
         broadcast(modelName.toLowerCase(), {action:'updated',data:ctx.vars['updated']})
         return ctx.vars['updated']
       } catch(e) {
@@ -1552,7 +1585,7 @@ async function execOp(line, ctx, server) {
     const modelName=line.match(/delete\s+(\w+)/)?.[1]
     if (modelName) _cacheInvalidate(modelName.toLowerCase())
     const m=server.models[modelName]
-    if (m) { m.delete(ctx.params.id||ctx.vars['id']); ctx.res.noContent(); return '__DONE__' }
+    if (m) { const ownerId=(m.ownerFk && ctx.user?.id)?ctx.user.id:null; m.delete(ctx.params.id||ctx.vars['id'], ownerId); ctx.res.noContent(); return '__DONE__' }
     return null
   }
 
@@ -1569,10 +1602,14 @@ async function execOp(line, ctx, server) {
     const status=parseInt(p[p.length-1])||200
     const exprParts=isNaN(parseInt(p[p.length-1]))?p:p.slice(0,-1)
 
-    // Cache check for GET .all() calls — serve pre-serialized string
+    // Cache check for GET .all() calls — serve pre-serialized string.
+    // Se o model tem dono, a chave inclui o usuário (senão vazaria dados
+    // de um usuário para outro no cache compartilhado por path).
     const _isGetAll = ctx.req?.method === 'GET' && exprParts.join(' ').match(/\.all\(/)
+    const _allModel = _isGetAll ? exprParts[0]?.match(/^(\w+)\./)?.[1] : null
+    const _allOwned = _allModel && MODEL_DEFS[_allModel]?.ownerFk
+    const _ck = _isGetAll ? (ctx.req.method + ':' + ctx.req.path + (_allOwned && ctx.user?.id ? '#u='+ctx.user.id : '')) : null
     if (_isGetAll) {
-      const _ck = ctx.req.method + ':' + ctx.req.path
       const _cached = _cacheGet(_ck)
       if (_cached !== null) {
         ctx.res.writeHead(status, {'Content-Type':'application/json','Content-Length':Buffer.byteLength(_cached),'X-Cache':'HIT'})
@@ -1585,7 +1622,6 @@ async function execOp(line, ctx, server) {
 
     // After executing, cache the result for next request
     if (_isGetAll && Array.isArray(result)) {
-      const _ck = ctx.req.method + ':' + ctx.req.path
       const _body = JSON.stringify(result)
       const _tbl = exprParts[0]?.replace(/\.all.*/,'')?.toLowerCase()
       _cacheSet(_ck, _body, _tbl ? [_tbl] : null)
@@ -1665,11 +1701,13 @@ function evalModelOp(op, expr, ctx, server) {
   const modelName=expr.match(/^(\w+)\./)?.[1]; const m=server.models[modelName]; if(!m)return op==='all'?[]:null
   const inner=expr.match(/\.\w+\(([^)]*)\)/)?.[1]||''
   const getArg=(key)=>{ const r=inner.match(new RegExp(key+'=([^,)]+)')); return r?resolveVar(r[1],ctx):null }
-  if(op==='all') return m.all({limit:getArg('limit'),offset:getArg('offset')||evalMath(getArg('_offset')||'0',ctx),order:getArg('order'),where:getArg('where')})
+  // Recurso que ~belongs no user → leituras escopadas ao autenticado
+  const ownerId = (m.ownerFk && ctx.user?.id) ? ctx.user.id : null
+  if(op==='all') return m.all({limit:getArg('limit'),offset:getArg('offset')||evalMath(getArg('_offset')||'0',ctx),order:getArg('order'),where:getArg('where'),ownerId})
   if(op==='find') { const id=inner.trim(); return m.find(resolveVar(id,ctx)||ctx.params.id) }
   if(op==='findBy') { const[f,v]=inner.split('='); return m.findBy(f.trim(),resolveVar(v?.trim(),ctx)) }
   if(op==='paginate') { const[pg,pp]=inner.split(','); return m.paginate(parseInt(resolveVar(pg?.trim(),ctx))||1,parseInt(resolveVar(pp?.trim(),ctx))||15) }
-  if(op==='count') return m.count()
+  if(op==='count') return m.count({ownerId})
   if(op==='sum') return m.sum(inner.trim())
   if(op==='avg') return m.avg(inner.trim())
   if(op==='where') { const p=inner.split(','); return m.where(p[0]?.trim(),p[1]?.trim()||'=',resolveVar(p[2]?.trim(),ctx)) }

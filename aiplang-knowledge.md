@@ -37,6 +37,8 @@ model Name {
 Types: `uuid text int float bool timestamp json enum`
 Modifiers: `pk auto required unique hashed default=val index`
 
+**Dono automático:** um model com `~belongs User` (o model com senha hasheada) é escopado ao usuário autenticado: `insert` grava o `user_id` do token; `Model.all()`/`.count()` retornam só as linhas do usuário; `update`/`delete` só afetam as linhas dele (bloqueia IDOR). Não é preciso filtrar por usuário na mão.
+
 ## API — ALWAYS one blank line between ops, return is last
 ```
 api POST /path {

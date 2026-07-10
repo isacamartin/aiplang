@@ -1170,22 +1170,44 @@ function AIPLANG_HYDRATE_SSR(cfg) {
     document.querySelectorAll(sel).forEach(table => {
       const cols = JSON.parse(table.getAttribute('data-fx-cols') || '[]')
       const delPath = table.getAttribute('data-fx-delete')
+      const editPath = table.getAttribute('data-fx-edit')
+      const editMethod = table.getAttribute('data-fx-edit-method') || 'PUT'
       const tbody = table.querySelector('tbody')
       if (!tbody) return
       if (!_emptyRow.has(tbody)) _emptyRow.set(tbody, tbody.innerHTML) // snapshot do SSR
       if (!rows.length) { tbody.innerHTML = _emptyRow.get(tbody); return } // restaura "vazio"
       tbody.innerHTML = rows.map(r => {
-        const tds = cols.map(c => `<td class="fx-td">${escHtml(r[c])}</td>`).join('')
-        const act = delPath
-          ? `<td class="fx-td fx-td-actions"><button class="fx-action-btn fx-delete-btn" data-fx-del="${escHtml(String(delPath).replace('{id}', r.id))}">Excluir</button></td>`
-          : ''
+        const tds = cols.map(c => `<td class="fx-td" data-col="${escHtml(c)}">${escHtml(r[c])}</td>`).join('')
+        const btns = []
+        if (editPath) btns.push(`<button class="fx-action-btn fx-edit-btn" data-fx-edit="${escHtml(String(editPath).replace('{id}', r.id))}">Editar</button>`)
+        if (delPath) btns.push(`<button class="fx-action-btn fx-delete-btn" data-fx-del="${escHtml(String(delPath).replace('{id}', r.id))}">Excluir</button>`)
+        const act = btns.length ? `<td class="fx-td fx-td-actions">${btns.join('')}</td>` : ''
         return `<tr class="fx-tr">${tds}${act}</tr>`
       }).join('')
       tbody.querySelectorAll('[data-fx-del]').forEach(b => b.addEventListener('click', async () => {
         b.disabled = true
         try { await api(b.getAttribute('data-fx-del'), { method: 'DELETE' }); await runQueries() } catch {}
       }))
+      tbody.querySelectorAll('[data-fx-edit]').forEach(b => b.addEventListener('click', () => enterEditMode(b.closest('tr'), b.getAttribute('data-fx-edit'), editMethod)))
     })
+  }
+
+  // Edição inline de uma linha: transforma as células em inputs e salva via PUT
+  function enterEditMode(tr, path, method) {
+    if (!tr) return
+    const tds = [...tr.querySelectorAll('td[data-col]')]
+    tds.forEach(td => { const v = td.textContent; td.innerHTML = `<input class="fx-input" value="${escHtml(v)}">` })
+    const actTd = tr.querySelector('.fx-td-actions')
+    if (!actTd) return
+    actTd.innerHTML = `<button class="fx-action-btn fx-edit-btn" data-save>Salvar</button><button class="fx-action-btn" data-cancel>Cancelar</button>`
+    actTd.querySelector('[data-save]').addEventListener('click', async e => {
+      e.target.disabled = true
+      const body = {}
+      tds.forEach(td => { const inp = td.querySelector('input'); if (inp) body[td.getAttribute('data-col')] = inp.value })
+      try { await api(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); await runQueries() }
+      catch { await runQueries() }
+    })
+    actTd.querySelector('[data-cancel]').addEventListener('click', () => runQueries())
   }
 
   // Store simples dos @vars carregados, para resolver data-fx-bind (ex: stats)

@@ -1139,5 +1139,144 @@ document.addEventListener('DOMContentLoaded', () => {
     const targetSel = script.getAttribute('target') || '#app'
     const container = document.querySelector(targetSel)
     if (container) AIPLANG.boot(script.textContent, container)
+    return
   }
+  // Progressive hydration of server-rendered pages (window.__AIPLANG_PAGE__)
+  if (window.__AIPLANG_PAGE__) AIPLANG_HYDRATE_SSR(window.__AIPLANG_PAGE__)
 })
+
+// ─────────────────────────────────────────────────────────────
+// SSR HYDRATION — liga o DOM já renderizado pelo servidor:
+// guarda o JWT, injeta Authorization em toda chamada, intercepta
+// forms/tabelas/logout. Sem isto, forms caem em submit nativo (GET).
+// ─────────────────────────────────────────────────────────────
+function AIPLANG_HYDRATE_SSR(cfg) {
+  const TOKEN_KEY = 'aiplang_token'
+  const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) } catch { return null } }
+  const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch {} }
+  const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  async function api(path, opts = {}) {
+    opts.headers = opts.headers || {}
+    const t = getToken()
+    if (t) opts.headers['Authorization'] = 'Bearer ' + t
+    return fetch(path, opts)
+  }
+
+  // Preenche as tabelas ligadas a um @binding com os dados recebidos
+  function fillTargets(name, data) {
+    const rows = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : [])
+    const sel = `table[data-fx-table="@${name}"],table[data-fx-table="${name}"]`
+    document.querySelectorAll(sel).forEach(table => {
+      const cols = JSON.parse(table.getAttribute('data-fx-cols') || '[]')
+      const delPath = table.getAttribute('data-fx-delete')
+      const tbody = table.querySelector('tbody')
+      if (!tbody) return
+      const span = cols.length + (delPath ? 1 : 0)
+      if (!rows.length) return // mantém a linha "empty" do SSR
+      tbody.innerHTML = rows.map(r => {
+        const tds = cols.map(c => `<td class="fx-td">${escHtml(r[c])}</td>`).join('')
+        const act = delPath
+          ? `<td class="fx-td fx-td-actions"><button class="fx-action-btn fx-delete-btn" data-fx-del="${escHtml(String(delPath).replace('{id}', r.id))}">Excluir</button></td>`
+          : ''
+        return `<tr class="fx-tr">${tds}${act}</tr>`
+      }).join('')
+      tbody.querySelectorAll('[data-fx-del]').forEach(b => b.addEventListener('click', async () => {
+        b.disabled = true
+        try { await api(b.getAttribute('data-fx-del'), { method: 'DELETE' }); await runQueries() } catch {}
+      }))
+    })
+  }
+
+  // Store simples dos @vars carregados, para resolver data-fx-bind (ex: stats)
+  const store = {}
+  function resolvePath(expr) {
+    const parts = expr.replace(/^[@$]/, '').split('.')
+    let v = store[parts[0]]
+    for (let i = 1; i < parts.length && v != null; i++) v = v[parts[i]]
+    return v
+  }
+  // Preenche valores escalares ligados via data-fx-bind (stats, etc.)
+  function renderBinds() {
+    document.querySelectorAll('[data-fx-bind]').forEach(el => {
+      const v = resolvePath(el.getAttribute('data-fx-bind'))
+      if (v !== undefined && v !== null) el.textContent = v
+    })
+  }
+
+  // Alvo de uma query: campo target, ou uma action que seja um @var simples
+  // (o template usa `~mount GET /api/x => @x`, que vira action, não target)
+  function queryTarget(q) {
+    if (q.target) return q.target.replace(/^@/, '')
+    const a = (q.action || '').trim()
+    return /^@[a-zA-Z_]\w*$/.test(a) ? a.slice(1) : ''
+  }
+
+  // Executa as queries de mount/interval e popula os alvos
+  async function runQueries() {
+    for (const q of (cfg.queries || [])) {
+      if ((q.trigger !== 'mount' && q.trigger !== 'interval') || (q.method && q.method !== 'GET')) continue
+      const target = queryTarget(q)
+      if (!target) continue
+      try {
+        const res = await api(q.path)
+        if (res.status === 401) { setToken(null); continue }
+        if (!res.ok) continue
+        const data = await res.json()
+        store[target] = data
+        fillTargets(target, data)
+        renderBinds()
+      } catch {}
+    }
+  }
+
+  // Liga cada form renderizado pelo servidor
+  document.querySelectorAll('form[data-fx-form]').forEach(form => {
+    form.addEventListener('submit', async e => {
+      e.preventDefault()
+      const btn = form.querySelector('button[type="submit"],.fx-btn')
+      const msg = form.querySelector('.fx-form-msg')
+      const path = form.getAttribute('data-fx-form')
+      const method = form.getAttribute('data-fx-method') || 'POST'
+      const action = form.getAttribute('data-fx-action') || ''
+      const data = {}
+      form.querySelectorAll('input,select,textarea').forEach(i => { if (i.name) data[i.name] = i.value })
+      const label = btn ? btn.textContent : ''
+      if (btn) { btn.disabled = true; btn.textContent = '...' }
+      if (msg) { msg.textContent = ''; msg.className = 'fx-form-msg' }
+      try {
+        const res = await api(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+        const result = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          if (msg) { msg.className = 'fx-form-msg fx-form-err'; msg.textContent = result.message || result.error || 'Erro. Tente novamente.' }
+          return
+        }
+        if (result && result.token) setToken(result.token)
+        if (action.startsWith('redirect ')) { window.location.href = action.slice(9).trim(); return }
+        form.reset()
+        if (msg) { msg.className = 'fx-form-msg fx-form-ok'; msg.textContent = 'Feito!' }
+        await runQueries()
+      } catch (err) {
+        if (msg) { msg.className = 'fx-form-msg fx-form-err'; msg.textContent = 'Erro de rede. Tente novamente.' }
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label || 'Submit' }
+      }
+    })
+  })
+
+  // Logout: limpa o token e volta pra home
+  document.querySelectorAll('a[href="/logout"],a[href$="/logout"]').forEach(a => {
+    a.addEventListener('click', e => { e.preventDefault(); setToken(null); window.location.href = '/' })
+  })
+
+  // Carga inicial das tabelas/queries + re-fetch periódico dos intervals
+  runQueries()
+  for (const q of (cfg.queries || [])) {
+    if (q.trigger === 'interval' && q.interval > 0 && (!q.method || q.method === 'GET')) {
+      const target = queryTarget(q)
+      if (!target) continue
+      setInterval(async () => {
+        try { const res = await api(q.path); if (res.ok) { const d = await res.json(); store[target] = d; fillTargets(target, d); renderBinds() } } catch {}
+      }, q.interval)
+    }
+  }
+}

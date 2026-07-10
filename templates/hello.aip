@@ -5,4 +5,4 @@
 %hello dark /
 nav{aiplang}
 hero{Hello, World!|One file. Zero config. Just run.} animate:blur-in
-foot{© 2025 aiplang}
+foot{© aiplang}

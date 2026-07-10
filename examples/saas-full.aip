@@ -1,5 +1,5 @@
 # Full SaaS — home + dashboard + login
-# flux-web v1.0
+# aiplang example
 
 %home dark /
 
@@ -10,7 +10,7 @@ nav{AppName>/dashboard:Dashboard>/pricing:Pricing>/login:Sign in}
 hero{Ship faster with AI|Deploy in seconds. Zero config.>/dashboard:Open app>/pricing:See plans}
 stats{@stats.users:Users|@stats.mrr:MRR|@stats.uptime:Uptime}
 row3{rocket>Deploy instantly>Push to git, live in 3 seconds.|shield>Enterprise>SOC2, GDPR, SSO built-in.|chart>Observability>Real-time errors and performance.}
-foot{© 2025 AppName>/privacy:Privacy>/terms:Terms}
+foot{© AppName>/privacy:Privacy>/terms:Terms}
 
 ---
 
@@ -37,7 +37,7 @@ form POST /api/users => @users.push($result) {
   Email : email : alice@company.com
   Plan : select : starter,pro,enterprise
 }
-foot{AppName Dashboard © 2025}
+foot{AppName Dashboard ©}
 
 ---
 
@@ -49,4 +49,4 @@ form POST /api/auth/login => redirect /dashboard {
   Email : email : you@company.com
   Password : password :
 }
-foot{© 2025 AppName}
+foot{© AppName}

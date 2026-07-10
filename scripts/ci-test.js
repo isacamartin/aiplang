@@ -77,9 +77,9 @@ const srv = spawn(process.execPath, [SERVER, '/tmp/aiplang-ci.aip', String(PORT)
   env: { ...process.env, JWT_SECRET: 'ci-test-secret-2025' }
 })
 
-let slog = ''
+let slog = '', serr = ''
 srv.stdout.on('data', d => slog += d)
-srv.stderr.on('data', d => {})
+srv.stderr.on('data', d => serr += d)
 
 const results = []
 let exitCode = 0
@@ -114,10 +114,22 @@ async function req(method, p, body, token) {
   })
 }
 
-setTimeout(async () => {
-  if (!slog.includes('Server →')) {
+// Wait for the server banner (slow disks / cold caches can take >5s)
+async function waitForServer(timeoutMs = 60000) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (slog.includes('Server →')) return true
+    if (srv.exitCode !== null) return false
+    await new Promise(r => setTimeout(r, 250))
+  }
+  return false
+}
+
+;(async () => {
+  if (!await waitForServer()) {
     console.error('✗ Server failed to start')
     console.error(slog)
+    console.error(serr)
     process.exit(1)
   }
   console.log('  ✓  Server started\n')
@@ -208,4 +220,4 @@ setTimeout(async () => {
 
   srv.kill()
   process.exit(exitCode)
-}, 5000)
+})()

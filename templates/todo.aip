@@ -85,7 +85,7 @@ nav{TodoAI>/registro:Criar conta}
 hero{Organize sua vida|Simples, rápido, eficiente.>/registro:Começar grátis} animate:blur-in
 row3{check>Fácil>Adicione tarefas em segundos.|bell>Prioridades>Classifique por urgência.|chart>Progresso>Acompanhe sua evolução.}
 form POST /api/auth/login => redirect /app { Email:email | Senha:password }
-foot{© 2025 TodoAI}
+foot{© TodoAI}
 
 ---
 
@@ -94,7 +94,7 @@ foot{© 2025 TodoAI}
 nav{TodoAI>/login:Entrar}
 hero{Criar conta|Grátis para sempre.}
 form POST /api/auth/registro => redirect /app { Nome:text | Email:email | Senha:password }
-foot{© 2025}
+foot{©}
 
 ---
 

@@ -37,7 +37,7 @@
       "~theme accent=#6366f1 radius=1rem font=Inter",
       "nav{${3:App}>/login:Entrar}",
       "hero{${3:App}|${4:Descrição.}>/registro:Começar} animate:blur-in",
-      "foot{© 2025 ${3:App}}"
+      "foot{© ${3:App}}"
     ],
     "description": "Full-stack aiplang app skeleton"
   },
@@ -73,7 +73,7 @@
       "nav{App}",
       "hero{${3:Título}|${4:Subtítulo.}}",
       "table @${2:data} { ${5:Campo}:${6:field} | empty: Nenhum item. }",
-      "foot{© 2025}"
+      "foot{©}"
     ],
     "description": "aiplang page"
   },

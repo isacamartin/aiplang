@@ -48,7 +48,7 @@ api POST /api/auth/login {
 ~theme accent=#6366f1 radius=1rem font=Inter
 nav{MyApp>/login:Sign in}
 hero{Welcome|Built with aiplang.} animate:blur-in
-foot{© 2025}
+foot{© 2026}
 ```
 
 ## Why LLMs love it

@@ -1,5 +1,5 @@
 # Complete CRUD — users management
-# flux-web v1.0
+# aiplang example
 
 %users dark /users
 
@@ -20,4 +20,4 @@ form POST /api/users => @users.push($result) {
   Email : email : alice@company.com
   Plan : select : starter,pro,enterprise
 }
-foot{AppName © 2025}
+foot{AppName ©}

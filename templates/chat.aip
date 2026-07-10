@@ -97,7 +97,7 @@ api GET /api/online {
 nav{ChatAI}
 hero{Chat em tempo real|Converse com sua equipe.>/registro:Criar conta}
 form POST /api/auth/login => redirect /chat { Email:email | Senha:password }
-foot{© 2025 ChatAI}
+foot{© ChatAI}
 
 ---
 
@@ -106,7 +106,7 @@ foot{© 2025 ChatAI}
 nav{ChatAI>/login:Entrar}
 hero{Criar conta|Grátis para sempre.}
 form POST /api/auth/registro => redirect /chat { Nome:text | Email:email | Senha:password }
-foot{© 2025}
+foot{©}
 
 ---
 

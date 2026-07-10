@@ -1,6 +1,6 @@
 # Guia de Prompt Engineering para aiplang
 
-Como gerar apps perfeitos com Claude, GPT-4, Gemini.
+Como gerar apps perfeitos com Claude, GPT-5, Gemini.
 
 ---
 

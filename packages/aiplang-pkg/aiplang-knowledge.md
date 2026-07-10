@@ -100,7 +100,7 @@ btn{Label > DELETE /api/path > confirm:Are you sure?}
 select @filterVar { All | Active | Inactive }
 if @var { blocks }
 raw{<div>any HTML or embed</div>}
-foot{© 2025 Name>/path:Link}
+foot{© 2026 Name>/path:Link}
 ```
 
 ## Animate any block

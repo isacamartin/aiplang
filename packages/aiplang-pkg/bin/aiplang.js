@@ -49,7 +49,7 @@ class Spinner {
   }
 }
 
-const VERSION     = '2.11.13'
+const VERSION     = (() => { try { return require('../package.json').version } catch { return '0.0.0' } })()
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -311,6 +311,17 @@ function listTemplates() {
 if (cmd === 'template') {
   const sub = args[0]
   ensureTemplatesDir()
+
+  // Nome de template só pode ser um identificador simples — impede que
+  // "../../x" escreva/apague arquivos fora do diretório de templates
+  const VALID_TEMPLATE_NAME = /^[A-Za-z0-9_-]+$/
+  if (['save','add','remove','rm','delete','edit','open','show','cat','export'].includes(sub)) {
+    const tn = args[1]
+    if (tn && !VALID_TEMPLATE_NAME.test(tn)) {
+      console.error(`\n  ✗  Nome de template inválido: "${tn}" (use apenas letras, números, _ ou -)\n`)
+      process.exit(1)
+    }
+  }
 
   if (!sub || sub === 'list' || sub === 'ls') {
     listTemplates(); process.exit(0)
@@ -702,7 +713,7 @@ function generateTypes(app, srcFile) {
   }
 
   lines.push(`// ── aiplang version ──────────────────────────────────────────`)
-  lines.push(`export const AIPLANG_VERSION     = '2.11.13'`)
+  lines.push(`export const AIPLANG_VERSION     = '${VERSION}'`)
   lines.push(``)
   return lines.join('\n')
 }
@@ -713,10 +724,14 @@ function _cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s }
 function validateAipSrc(source) {
   const errors = []
   const lines = source.split('\n')
-  const knownDirs = new Set(['db','auth','env','mail','s3','stripe','plan','admin','realtime','use','plugin','import','store','ssr','interval','mount','theme','guard','validate','unique','hash','check','cache','rateLimit','broadcast','soft-delete','belongs','var','component','end'])
+  const knownDirs = new Set(['db','auth','env','mail','s3','stripe','plan','admin','realtime','use','plugin','import','store','ssr','interval','mount','theme','guard','validate','unique','hash','check','cache','query','rateLimit','broadcast','soft-delete','belongs','var','component','end'])
+  let inModel = false
   for (let i=0; i<lines.length; i++) {
     const line = lines[i].trim()
     if (!line || line.startsWith('#')) continue
+    // Rastreia se estamos dentro de um bloco `model { ... }`
+    if (/^model\s+\w+/.test(line)) inModel = line.includes('{') && !line.includes('}')
+    else if (inModel && line === '}') inModel = false
     const dm = line.match(/^(guard|validate|unique|hash|check|cache|mount|store|ssr|interval|auth|db|env|use|plugin|import|theme|rateLimit|broadcast)\b/)
     if (dm && !line.startsWith('~') && !line.startsWith('api ') && !line.startsWith('model ') && !line.startsWith('%')) {
       errors.push({ line:i+1, code:line, message:`Missing ~ before '${dm[1]}'`, fix:`~${line}`, severity:'error' })
@@ -728,15 +743,16 @@ function validateAipSrc(source) {
       errors.push({ line:i+1, code:line, message:"Use ':' not '-' in field definitions", fix:line.replace(/\s*-\s*/g,' : '), severity:'error' })
     }
     if (line.startsWith('~')) {
-      const dir = line.slice(1).split(/\s/)[0]
+      // ~cache:clear e afins: valida só a raiz antes do ':'
+      const dir = line.slice(1).split(/[\s:]/)[0]
       if (!knownDirs.has(dir)) errors.push({ line:i+1, code:line, message:`Unknown directive ~${dir}`, severity:'warning' })
     }
     if (/^table\s*\{/.test(line)) {
       errors.push({ line:i+1, code:line, message:"table missing @binding — e.g.: table @users { Name:name | ... }", severity:'error' })
     }
 
-    // Type check on model fields: field : unknowntype
-    if (/^\s{2,}\w+\s*:\s*\w+/.test(lines[i]) && !line.startsWith('api') && !line.startsWith('model') && !line.startsWith('~')) {
+    // Type check on model fields: field : unknowntype (só dentro de model{})
+    if (inModel && /^\s{2,}\w+\s*:\s*\w+/.test(lines[i]) && !line.startsWith('api') && !line.startsWith('model') && !line.startsWith('~')) {
       const typePart = line.split(':')[1]?.trim().split(/\s/)[0]?.toLowerCase()
       if (typePart && typePart.length > 1 && !_KNOWN_TYPES.has(typePart) &&
           !['pk','auto','required','unique','hashed','index','asc','desc','fk'].includes(typePart)) {
@@ -874,10 +890,13 @@ if (cmd==='build') {
   fs.mkdirSync(outDir,{recursive:true})
   console.log(`\n  ${bold(cyan('aiplang'))} build ${dim('v'+VERSION)} — ${files.length} file(s)\n`)
   let total=0
+  const outRoot=path.resolve(outDir)
   for(const page of pages){
     const html=renderPage(page,pages)
     const fname=page.route==='/'?'index.html':page.route.replace(/^\//,'')+'/index.html'
-    const out=path.join(outDir,fname)
+    const out=path.resolve(outRoot,fname)
+    // Impede que uma rota como /../../x escreva fora do diretório de saída
+    if(out!==outRoot&&!out.startsWith(outRoot+path.sep)){console.error(`  ✗  rota insegura ignorada: ${page.route}`);continue}
     fs.mkdirSync(path.dirname(out),{recursive:true})
     fs.writeFileSync(out,html)
     const note=html.includes('aiplang-hydrate')?'+hydrate':'zero JS ✓'
@@ -886,7 +905,7 @@ if (cmd==='build') {
   }
   const hf=path.join(RUNTIME_DIR,'aiplang-hydrate.js')
   if(fs.existsSync(hf)){const dst=path.join(outDir,'aiplang-hydrate.js');fs.copyFileSync(hf,dst);total+=fs.statSync(dst).size;console.log(`  ✓  ${dst.padEnd(40)} ${hSize(fs.statSync(dst).size)}`)}
-  if(fs.existsSync('public'))fs.readdirSync('public').filter(f=>!f.endsWith('.aip')).forEach(f=>fs.copyFileSync(path.join('public',f),path.join(outDir,f)))
+  if(fs.existsSync('public'))fs.readdirSync('public').filter(f=>!f.endsWith('.aip')).forEach(f=>{const s=path.join('public',f);fs.cpSync(s,path.join(outDir,f),{recursive:true})})
   console.log(`\n  ${pages.length} page(s) — ${hSize(total)} total\n\n  Preview: npx serve ${outDir}\n  Deploy:  Vercel, Netlify, S3, any static host\n`)
   process.exit(0)
 }
@@ -906,21 +925,53 @@ if (cmd==='serve'||cmd==='dev') {
       mtimes[fp]=mt
     })
   },500)
+  const RELOAD_JS = `\n<script>const __es=new EventSource('/__aiplang_reload');__es.onmessage=e=>{if(e.data==='reload')location.reload()}</script>`
+  // Confina um caminho de request dentro de uma raiz (bloqueia ../ traversal)
+  const safeJoin = (base, reqPath) => {
+    let rel; try { rel = decodeURIComponent(reqPath) } catch { rel = reqPath }
+    if (rel.includes('\0')) return null
+    const fp = path.resolve(base, '.' + (rel.startsWith('/') ? rel : '/' + rel))
+    return (fp === base || fp.startsWith(base + path.sep)) ? fp : null
+  }
+  // Compila as páginas .aip em memória e as serve por rota (init → serve funciona)
+  const pagesDir = path.join(root, 'pages')
+  const compilePages = () => {
+    if (!fs.existsSync(pagesDir)) return {}
+    try {
+      const src = fs.readdirSync(pagesDir).filter(f=>f.endsWith('.aip'))
+        .map(f=>fs.readFileSync(path.join(pagesDir,f),'utf8')).join('\n---\n')
+      const pages = parsePages(src)
+      const byRoute = {}
+      for (const pg of pages) byRoute[pg.route] = renderPage(pg, pages).replace('</body>', RELOAD_JS+'</body>')
+      return byRoute
+    } catch (e) { return { __error: e.message } }
+  }
   require('http').createServer((req,res)=>{
     if(req.url.split('?')[0]==='/__aiplang_reload'){
       res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Access-Control-Allow-Origin':'*'})
       res.write('data: connected\n\n');clients.push(res)
       req.on('close',()=>{clients=clients.filter(c=>c!==res)});return
     }
-    let p=req.url.split('?')[0];if(p==='/') p='/index.html'
+    const p=req.url.split('?')[0]
+    // 1) Rota de página compilada a partir de pages/*.aip
+    const routes = compilePages()
+    if (routes.__error) { res.writeHead(500,{'Content-Type':'text/html;charset=utf-8'}); res.end(`<pre>aiplang parse error:\n${routes.__error}</pre>`); return }
+    if (routes[p]) {
+      res.writeHead(200,{'Content-Type':'text/html;charset=utf-8','Access-Control-Allow-Origin':'*'})
+      res.end(routes[p]); return
+    }
+    // 2) Arquivos estáticos (public/ e raiz), com contenção de caminho
+    const staticPath = p==='/'?'/index.html':p
     let fp=null
-    for(const c of [path.join(root,'public',p),path.join(root,p)]){if(fs.existsSync(c)&&fs.statSync(c).isFile()){fp=c;break}}
+    for(const base of [path.join(root,'public'),root]){
+      const c=safeJoin(base, staticPath)
+      if(c&&fs.existsSync(c)&&fs.statSync(c).isFile()){fp=c;break}
+    }
     if(!fp&&p.endsWith('.aip')){const c=path.join(root,'pages',path.basename(p));if(fs.existsSync(c))fp=c}
-    if(!fp){res.writeHead(404);res.end('Not found');return}
+    if(!fp){res.writeHead(404,{'Content-Type':'text/html;charset=utf-8'});res.end('<pre>404 — nenhuma página ou arquivo em '+p+'</pre>');return}
     let content=fs.readFileSync(fp)
     if(path.extname(fp)==='.html'){
-      const inject=`\n<script>const __es=new EventSource('/__aiplang_reload');__es.onmessage=e=>{if(e.data==='reload')location.reload()}</script>`
-      content=content.toString().replace('</body>',inject+'</body>')
+      content=content.toString().replace('</body>',RELOAD_JS+'</body>')
     }
     res.writeHead(200,{'Content-Type':MIME[path.extname(fp)]||'application/octet-stream','Access-Control-Allow-Origin':'*'})
     res.end(content)
@@ -1257,7 +1308,9 @@ function parseItems(body) {
 }
 function parseCols(s){return s.split('|').map(c=>{c=c.trim();if(c.startsWith('empty:')||!c)return null;const[l,k]=c.split(':').map(x=>x.trim());return k?{label:l,key:k}:null}).filter(Boolean)}
 function parseEmpty(s){const m=s.match(/empty:\s*([^|]+)/);return m?m[1].trim():'No data.'}
-function parseFields(s){return s.split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());return label?{label,type:type||'text',placeholder:ph||'',name:label.toLowerCase().replace(/\s+/g,'_')}:null}).filter(Boolean)}
+const FIELD_NAME_BY_TYPE={email:'email',password:'password'}
+function slugField(s){return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'')}
+function parseFields(s){return s.split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());return label?{label,type:type||'text',placeholder:ph||'',name:FIELD_NAME_BY_TYPE[type]||slugField(label)}:null}).filter(Boolean)}
 
 function applyMods(html, b) {
   if(!html||(!b.extraClass&&!b.animate)) return html
@@ -1295,10 +1348,12 @@ function renderPage(page, allPages) {
       idx: j,
       numeric: numericKeys.some(kw => col.key.toLowerCase().includes(kw))
     }))
-    const initParts = colDefs.map(d =>
-      d.numeric ? `c${d.idx}:new Float64Array(rows.map(r=>+(r.${JSON.stringify(d.origKey)}===undefined?r['${d.origKey}']:r[${JSON.stringify(d.origKey)}])||0))`
-                : `c${d.idx}:rows.map(r=>r[${JSON.stringify(d.origKey)}]??'')`
-    ).join(',')
+    const initParts = colDefs.map(d => {
+      const k = JSON.stringify(d.origKey)
+      return d.numeric
+        ? `c${d.idx}:new Float64Array(rows.map(r=>+(r[${k}]??0)||0))`
+        : `c${d.idx}:rows.map(r=>r[${k}]??'')`
+    }).join(',')
     const diffParts = colDefs.map(d => {
       const k = JSON.stringify(d.origKey)
       return d.numeric
@@ -1336,13 +1391,10 @@ function renderPage(page, allPages) {
 <meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<meta property="og:type" content="website">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <style>${minCSS(css(page.theme)+customVars+themeVarCSS)}</style>
 </head>
 <body>
-${body}${hydrate}
+${body}${compiledScript}${hydrate}
 </body>
 </html>`
 }
@@ -1838,7 +1890,7 @@ function rFoot(b) {
     if(f.isLink) inner+=`<a href="${esc(f.path)}" class="fx-footer-link">${esc(f.label)}</a>`
     else inner+=`<p class="fx-footer-text">${autoYear(f.text)}</p>`
   }
-  return `<footer class="fx-footer">${inner}</footer>
+  return `<footer class="fx-footer">${inner}</footer>${_yearScript}
 `
 }
 

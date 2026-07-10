@@ -1,6 +1,6 @@
 {
   "name": "aiplang",
-  "version": "2.11.13",
+  "version": "2.12.0",
   "description": "AI-first web language. One .aip file = complete app. Frontend + backend + database + auth.",
   "keywords": [
     "aiplang",
@@ -35,7 +35,7 @@
     "aiplang-knowledge.md"
   ],
   "engines": {
-    "node": ">=16"
+    "node": ">=20"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
@@ -50,11 +50,8 @@
     "nodemailer": "^8.0.3",
     "pg": "^8.11.0",
     "sql.js": "^1.10.3",
-    "stripe": "^14.0.0",
+    "stripe": "^18.0.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.44.0",
     "ws": "^8.16.0"
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^9.4.0"
   }
 }

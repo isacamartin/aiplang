@@ -18,6 +18,12 @@
 })()
 // Features: ORM+relations, email, jobs/queues, admin panel, OAuth, soft deletes, events
 
+// Fonte única da versão — lida do package.json em vez de duplicada em strings
+const VERSION = (() => {
+  try { return require('../package.json').version }
+  catch { return '0.0.0' }
+})()
+
 const http    = require('http')
 const fs      = require('fs')
 const path    = require('path')
@@ -205,15 +211,14 @@ function dbRun(sql, params = []) {
     _getStmt(sql).run(...params)
     return
   }
-  // PostgreSQL: converter ? → $1, $2... e executar com await
+  // PostgreSQL: converter ? → $1, $2... — chamadores sync não aguardam,
+  // então o erro é logado aqui; re-throw dentro do .catch derrubaria o
+  // processo com unhandled rejection (use dbRunAsync para propagar erros)
   if (_pgPool) {
     let n = 0
     const pgSql = sql.replace(/\?/g, () => `$${++n}`)
-    // Async run — sem fire-and-forget: erros são propagados
     _pgPool.query(pgSql, params).catch(e => {
       console.error('[aiplang:pg] Write error:', e.message, '| SQL:', sql.slice(0,80))
-      // Re-throw para que o caller possa reagir se for await
-      throw e
     })
     return
   }
@@ -391,7 +396,7 @@ const generateRefreshToken = (user) => jwt.sign(
 
 const verifyJWT = (token) => {
   try {
-    const p = jwt.verify(token, JWT_SECRET)
+    const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
     if (p.type === 'refresh') return null
     return p
   } catch { return null }
@@ -399,7 +404,7 @@ const verifyJWT = (token) => {
 
 const verifyRefreshToken = (token) => {
   try {
-    const p = jwt.verify(token, getRefreshSecret())
+    const p = jwt.verify(token, getRefreshSecret(), { algorithms: ['HS256'] })
     if (p.type !== 'refresh') return null
     return p
   } catch { return null }
@@ -689,6 +694,20 @@ const MODEL_DEFS = {}
 function toTable(name) { return name.toLowerCase().replace(/([A-Z])/g,'_$1').replace(/^_/,'') + 's' }
 function toCol(field) { return field.replace(/([A-Z])/g,'_$1').toLowerCase() }
 
+// SQL identifiers (column/table names) can never be parameterized — they must
+// match this strict pattern before being interpolated into a query.
+const SAFE_IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+function assertIdent(name, what = 'identificador') {
+  const s = String(name)
+  if (!SAFE_IDENT.test(s)) {
+    const err = new Error(`SQL ${what} inválido: "${s}"`)
+    err.statusCode = 400
+    throw err
+  }
+  return s
+}
+const SAFE_SQL_OPS = ['=','!=','<>','<','<=','>','>=','LIKE','NOT LIKE','IS','IS NOT']
+
 // ── Runtime schema validation + coercion ─────────────────────────
 function validateAndCoerce(data, schema) {
   if (!schema) return { ok: true, data }
@@ -808,8 +827,13 @@ class Model {
       const safeOrder = /^[a-zA-Z_][a-zA-Z0-9_]*(\s+(asc|desc))?$/i
       if (safeOrder.test(String(opts.order))) sql += ` ORDER BY ${opts.order}`
     }
-    if (opts.limit)  sql += ` LIMIT ${opts.limit}`
-    if (opts.offset) sql += ` OFFSET ${opts.offset}`
+    const lim = parseInt(opts.limit, 10), off = parseInt(opts.offset, 10)
+    const hasLimit = Number.isInteger(lim) && lim >= 0
+    const hasOffset = Number.isInteger(off) && off > 0
+    if (hasLimit) sql += ` LIMIT ${lim}`
+    // SQLite/MySQL exigem LIMIT quando há OFFSET; usa -1 (sem teto) se faltar
+    else if (hasOffset) sql += ` LIMIT -1`
+    if (hasOffset) sql += ` OFFSET ${off}`
     return dbAll(sql, params)
   }
 
@@ -820,13 +844,16 @@ class Model {
   }
 
   findBy(field, value) {
+    assertIdent(field, 'coluna')
     let sql = `SELECT * FROM ${this.tableName} WHERE ${field} = ? LIMIT 1`
     if (this.softDelete) sql = `SELECT * FROM ${this.tableName} WHERE ${field} = ? AND deleted_at IS NULL LIMIT 1`
     return dbGet(sql, [value])
   }
 
   where(field, op, value) {
-    let sql = `SELECT * FROM ${this.tableName} WHERE ${field} ${op} ?`
+    assertIdent(field, 'coluna')
+    const safeOp = SAFE_SQL_OPS.find(o => o === String(op).toUpperCase()) || '='
+    let sql = `SELECT * FROM ${this.tableName} WHERE ${field} ${safeOp} ?`
     if (this.softDelete) sql += ' AND deleted_at IS NULL'
     return dbAll(sql, [value])
   }
@@ -856,6 +883,9 @@ class Model {
       throw err
     }
     const row = { ...validated.data }
+    // Drop keys that are not valid SQL identifiers — they can never be real
+    // columns and would otherwise be interpolated into the INSERT statement
+    for (const k of Object.keys(row)) if (!SAFE_IDENT.test(k)) delete row[k]
     if (!row.id) row.id = uuid()
     if (this.timestamps) {
       if (!row.created_at) row.created_at = now()
@@ -883,6 +913,7 @@ class Model {
     }
     const row = { ...validated.data }
     delete row.id; delete row.created_at; delete row.password
+    for (const k of Object.keys(row)) if (!SAFE_IDENT.test(k)) delete row[k]
     if (this.timestamps) row.updated_at = now()
     const sets = Object.keys(row).map(k => `${k} = ?`).join(', ')
     dbRun(`UPDATE ${this.tableName} SET ${sets} WHERE id = ?`, [...Object.values(row), id])
@@ -917,12 +948,14 @@ class Model {
   }
 
   sum(field, opts = {}) {
+    assertIdent(field, 'coluna')
     let sql = `SELECT SUM(${field}) as total FROM ${this.tableName}`
     if (this.softDelete) sql += ' WHERE deleted_at IS NULL'
     return dbGet(sql)?.total || 0
   }
 
   avg(field) {
+    assertIdent(field, 'coluna')
     let sql = `SELECT AVG(${field}) as avg FROM ${this.tableName}`
     if (this.softDelete) sql += ' WHERE deleted_at IS NULL'
     return parseFloat(dbGet(sql)?.avg || 0).toFixed(2)
@@ -931,7 +964,8 @@ class Model {
   // ── Relationships ───────────────────────────────────────────────
   hasMany(relModel, fk) {
     const m = new Model(relModel)
-    return (parentId) => dbAll(`SELECT * FROM ${m.tableName} WHERE ${fk || this.modelName.toLowerCase() + '_id'} = ?`, [parentId])
+    const col = assertIdent(fk || this.modelName.toLowerCase() + '_id', 'coluna')
+    return (parentId) => dbAll(`SELECT * FROM ${m.tableName} WHERE ${col} = ?`, [parentId])
   }
   belongsTo(relModel, fk) {
     const m = new Model(relModel)
@@ -939,7 +973,8 @@ class Model {
   }
   hasOne(relModel, fk) {
     const m = new Model(relModel)
-    return (parentId) => dbGet(`SELECT * FROM ${m.tableName} WHERE ${fk || this.modelName.toLowerCase() + '_id'} = ? LIMIT 1`, [parentId])
+    const col = assertIdent(fk || this.modelName.toLowerCase() + '_id', 'coluna')
+    return (parentId) => dbGet(`SELECT * FROM ${m.tableName} WHERE ${col} = ? LIMIT 1`, [parentId])
   }
 
   // ── Observers / hooks ───────────────────────────────────────────
@@ -1028,6 +1063,10 @@ function parseApp(src) {
   const app = { env:[], db:null, auth:null, mail:null, stripe:null, s3:null, plugins:[], middleware:[], models:[], apis:[], pages:[], jobs:[], events:[], admin:null, realtime:false }
   const lines = src.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'))
   let i=0, inModel=false, inAPI=false, curModel=null, curAPI=null, pageLines=[], inPage=false
+  // Buffer p/ statements multi-linha dentro de um api (ex: `return { ... }`)
+  let apiDepth=0, apiStmt=''
+  const countBraces=s=>{let o=0,c=0;for(const ch of s){if(ch==='{')o++;else if(ch==='}')c++}return[o,c]}
+  const flushApiStmt=()=>{const s=apiStmt.trim();apiStmt='';if(s&&curAPI)parseAPILine(s,curAPI)}
 
   while (i < lines.length) {
     const line = lines[i]
@@ -1097,16 +1136,29 @@ function parseApp(src) {
         }
         app.apis.push(curAPI); curAPI=null; inAPI=false; i++; continue
       }
-      inAPI=true; i++; continue
+      inAPI=true; apiDepth=1; apiStmt=''; i++; continue
     }
-    if (inAPI && (line === '}' || (line.endsWith('}') && !line.includes('{')))) {
-      const opLine = line !== '}' ? line.slice(0, line.lastIndexOf('}')).trim() : null
-      if (opLine && curAPI) parseAPILine(opLine, curAPI)
-      if (curAPI) app.apis.push(curAPI); curAPI=null; inAPI=false; i++; continue
+    if (inAPI && curAPI) {
+      const [o,c]=countBraces(line)
+      // Este statement/objeto ainda está aberto? (chaves aninhadas, ex: return {)
+      const insideObject = apiDepth + o - c > 1 || (apiStmt && apiDepth > 1)
+      if (apiDepth + o - c <= 0) {
+        // Linha fecha o bloco api. Conteúdo antes do '}' final pertence ao body.
+        const pre = line.slice(0, line.lastIndexOf('}'))
+        apiStmt += (apiStmt? '\n':'') + pre
+        flushApiStmt()
+        apiDepth=0
+        app.apis.push(curAPI); curAPI=null; inAPI=false; i++; continue
+      }
+      apiStmt += (apiStmt? '\n':'') + line
+      apiDepth += o - c
+      // Statement completo quando voltamos à profundidade base do body (1)
+      if (apiDepth === 1) flushApiStmt()
+      i++; continue
     }
-    if (inAPI && curAPI) { parseAPILine(line, curAPI); i++; continue }
     i++
   }
+  if (inAPI && curAPI && apiStmt.trim()) flushApiStmt()
   if (inPage && pageLines.length) app.pages.push(parseFrontPage(pageLines.join('\n')))
   if (inModel && curModel) app.models.push(curModel)
   if (inAPI && curAPI) app.apis.push(curAPI)
@@ -1265,7 +1317,9 @@ function parseFrontPage(src) {
   }
   return p
 }
-function blockKind(line){const bi=line.indexOf('{');if(bi===-1)return'unknown';const h=line.slice(0,bi).trim();const m=h.match(/^([a-z]+)\d+$/);return m?m[1]:h}
+// O tipo do bloco é a PRIMEIRA palavra antes do '{' — blocos como
+// `form POST /x {` ou `table @y {` têm argumentos depois do nome
+function blockKind(line){const bi=line.indexOf('{');if(bi===-1)return'unknown';const first=line.slice(0,bi).trim().split(/\s+/)[0];const m=first.match(/^([a-z]+)\d+$/);return m?m[1]:first}
 
 // ═══════════════════════════════════════════════════════════════════
 // ROUTE COMPILER
@@ -1513,8 +1567,35 @@ async function execOp(line, ctx, server) {
   return null
 }
 
+// Split respeitando aninhamento de {}, [] e () — não quebra dentro de chamadas
+function splitTopLevel(s, sep) {
+  const out=[]; let depth=0, cur=''
+  for (const ch of s) {
+    if ('{[('.includes(ch)) depth++
+    else if ('}])'.includes(ch)) depth--
+    if (ch===sep && depth===0) { out.push(cur); cur='' }
+    else cur+=ch
+  }
+  if (cur.trim()) out.push(cur)
+  return out
+}
+
 function evalExpr(expr, ctx, server) {
   expr=expr.trim()
+  // Objeto literal: { chave: <expr>, ... } — avalia cada valor recursivamente
+  if (expr.startsWith('{') && expr.endsWith('}')) {
+    const obj={}
+    for (const pair of splitTopLevel(expr.slice(1,-1), ',')) {
+      const ci=pair.indexOf(':'); if(ci===-1)continue
+      const key=pair.slice(0,ci).trim().replace(/^["']|["']$/g,'')
+      if(!key)continue
+      obj[key]=evalExpr(pair.slice(ci+1).trim(), ctx, server)
+    }
+    return obj
+  }
+  // Número / string literal simples
+  if (/^-?\d+(\.\d+)?$/.test(expr)) return Number(expr)
+  if (/^["'].*["']$/.test(expr)) return expr.slice(1,-1)
   if (expr.startsWith('jwt('))       { const vn=expr.match(/jwt\(\$([^)]+)\)/)?.[1]; const u=vn?ctx.vars[vn]:ctx.body; return{token:generateJWT(u),refresh_token:generateRefreshToken(u),expires_in:JWT_EXPIRE,user:sanitize(u)} }
   if (expr==='$auth.user'||expr==='$auth') return ctx.user
   if (expr.includes('.all('))        { return evalModelOp('all', expr, ctx, server) }
@@ -1556,7 +1637,10 @@ function resolveVar(expr, ctx) {
   if (expr.startsWith('$')) { const path=expr.slice(1).split('.'); let v=ctx.vars[path[0]]; for(let i=1;i<path.length;i++)v=v?.[path[i]]; return v }
   return expr
 }
-function evalMath(expr,ctx){try{const r=expr.replace(/\$[\w.]+/g,m=>resolveVar(m,ctx)||0);return Function('"use strict";return('+r+')')()}catch{return 0}}
+// Só avalia expressões puramente aritméticas — valores resolvidos de $vars
+// podem vir do request, então qualquer outro caractere é rejeitado (evita
+// injeção de código via Function())
+function evalMath(expr,ctx){try{const r=expr.replace(/\$[\w.]+/g,m=>{const v=resolveVar(m,ctx);return (typeof v==='number'||/^-?\d+(\.\d+)?$/.test(String(v)))?Number(v):0});if(!/^[\d\s+\-*/%().]+$/.test(r))return 0;return Function('"use strict";return('+r+')')()}catch{return 0}}
 function sanitize(o){if(!o)return o;const s={...o};delete s.password;return s}
 function resolveEnv(v){if(!v)return v;if(v.startsWith('$'))return process.env[v.slice(1)]||null;return v}
 
@@ -1580,6 +1664,29 @@ function registerAdminPanel(server, adminConfig, models) {
   server.addRoute('GET', prefix + '/login', (req, res) => {
     const html = renderAdminLogin(prefix)
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(html)
+  })
+
+  // Admin login handler — valida credencial admin e grava cookie httpOnly
+  server.addRoute('POST', prefix + '/login', async (req, res) => {
+    const email = String(req.body?.email || '').toLowerCase().trim()
+    const password = String(req.body?.password || '')
+    const UserModel = server.models['User'] || Object.values(server.models)[0]
+    if (!UserModel) { res.error(500, 'No User model'); return }
+    const user = UserModel.findBy('email', email)
+    const ok = user && user.password && bcrypt.compareSync(password, user.password)
+    if (!ok || (guard === 'admin' && user.role !== 'admin')) {
+      res.error(401, 'Credenciais inválidas ou sem permissão de admin'); return
+    }
+    const token = generateJWT(user)
+    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+    res.setHeader('Set-Cookie', `aiplang_admin=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=604800${secure}`)
+    res.json(200, { ok: true, redirect: prefix })
+  })
+
+  // Admin logout — limpa o cookie
+  server.addRoute('POST', prefix + '/logout', (req, res) => {
+    res.setHeader('Set-Cookie', 'aiplang_admin=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0')
+    res.json(200, { ok: true })
   })
 
   // Admin API: list model records
@@ -1843,14 +1950,20 @@ class AiplangServer {
     // Servir arquivos estaticos /public/*
     const _sext = req.path && req.path.match(/\.([a-zA-Z0-9]+)$/)
     if (_sext && req.method === 'GET') {
-      const _appDir = server && server._appDir ? server._appDir : process.cwd()
-      const _cands = [
-        require('path').join(_appDir,'public',req.path),
-        require('path').join(process.cwd(),'public',req.path),
-        require('path').join(_appDir,req.path.slice(1)),
-      ]
-      for (const _fp of _cands) {
-        if (require('fs').existsSync(_fp)) {
+      const _path = require('path')
+      const _appDir = this && this._appDir ? this._appDir : process.cwd()
+      // Decodifica e normaliza; qualquer tentativa de escapar a raiz servida
+      // (../, %2e%2e, byte nulo) é barrada pela checagem de prefixo abaixo
+      let _rel
+      try { _rel = decodeURIComponent(req.path) } catch { _rel = req.path }
+      if (_rel.includes('\0')) { const b='{"error":"Bad request"}'; res.writeHead(400,{'Content-Type':'application/json'}); return res.end(b) }
+      const _publicDir = _path.resolve(_appDir, 'public')
+      const _roots = [_publicDir, _path.resolve(process.cwd(), 'public')]
+      for (const _root of _roots) {
+        const _fp = _path.resolve(_root, '.' + (_rel.startsWith('/') ? _rel : '/' + _rel))
+        // Contém o arquivo dentro da raiz pública (bloqueia path traversal)
+        if (_fp !== _root && !_fp.startsWith(_root + _path.sep)) continue
+        if (require('fs').existsSync(_fp) && require('fs').statSync(_fp).isFile()) {
           const _mime = getMimeType(_fp)
           const _buf  = require('fs').readFileSync(_fp)
           res.setHeader('Cache-Control','public,max-age=86400')
@@ -1973,9 +2086,17 @@ function rHero(line){const items=parseItems(extractBody(line));let h1='',sub='',
 function rStats(line){return`<div class="fx-stats">${parseItems(extractBody(line)).map(item=>{const[val,lbl]=(item[0]?.text||'').split(':');const bind=(val?.includes('@')||val?.includes('$'))?` data-fx-bind="${esc(val?.trim())}"` :'';return`<div class="fx-stat"><div class="fx-stat-val"${bind}>${esc(val?.trim())}</div><div class="fx-stat-lbl">${esc(lbl?.trim())}</div></div>`}).join('')}</div>\n`}
 function rRow(line){const bi=line.indexOf('{'),head=line.slice(0,bi).trim(),m=head.match(/row(\d+)/),cols=m?parseInt(m[1]):3;const cards=parseItems(extractBody(line)).map(item=>`<div class="fx-card">${item.map((f,fi)=>f.isImg?`<img src="${esc(f.src)}" class="fx-card-img" alt="" loading="lazy">`:f.isLink?`<a href="${esc(f.path)}" class="fx-card-link">${esc(f.label)} →</a>`:fi===0?`<div class="fx-icon">${ic(f.text)}</div>`:fi===1?`<h3 class="fx-card-title">${esc(f.text)}</h3>`:`<p class="fx-card-body">${esc(f.text)}</p>`).join('')}</div>`).join('');return`<div class="fx-grid fx-grid-${cols}">${cards}</div>\n`}
 function rSect(line){let inner='';parseItems(extractBody(line)).forEach((item,ii)=>item.forEach(f=>{if(f.isLink)inner+=`<a href="${esc(f.path)}" class="fx-sect-link">${esc(f.label)}</a>`;else if(ii===0)inner+=`<h2 class="fx-sect-title">${esc(f.text)}</h2>`;else inner+=`<p class="fx-sect-body">${esc(f.text)}</p>`}));return`<section class="fx-sect">${inner}</section>\n`}
-function rFoot(line){let inner='';for(const item of parseItems(extractBody(line)))for(const f of item){if(f.isLink)inner+=`<a href="${esc(f.path)}" class="fx-footer-link">${esc(f.label)}</a>`;else inner+=`<p class="fx-footer-text">${esc(f.text)}</p>`};return`<footer class="fx-footer">${inner}</footer>\n`}
+// Ano do copyright sempre atual: "© 2025 X" e "©" viram "© <ano> X"
+function footYear(t){const y=new Date().getFullYear();if(!t)return t;if(/©\s*\d{4}/.test(t))return t.replace(/©\s*\d{4}/,'© '+y);if(/©(?!\s*\d)/.test(t))return t.replace(/©/,'© '+y);return t}
+function rFoot(line){let inner='';for(const item of parseItems(extractBody(line)))for(const f of item){if(f.isLink)inner+=`<a href="${esc(f.path)}" class="fx-footer-link">${esc(f.label)}</a>`;else inner+=`<p class="fx-footer-text">${esc(footYear(f.text))}</p>`};return`<footer class="fx-footer">${inner}</footer>\n`}
+// Nome do campo do form: tipos canônicos (email/password) fixam o nome
+// esperado pela API, independente do label ("Senha:password" → name password)
+const FIELD_NAME_BY_TYPE = { email: 'email', password: 'password' }
+// Remove acentos e normaliza: "Título" → "titulo" (casa com a coluna da API)
+function slugField(s){ return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'') }
+function fieldName(label, type){ return FIELD_NAME_BY_TYPE[type] || slugField(label) }
 function rTable(line){const bi=line.indexOf('{'),binding=line.slice(6,bi).trim(),content=extractBody(line),em=content.match(/edit\s+(PUT|PATCH)\s+(\S+)/),dm=content.match(/delete\s+(?:DELETE\s+)?(\S+)/);const clean=content.replace(/edit\s+(PUT|PATCH)\s+\S+/g,'').replace(/delete\s+(?:DELETE\s+)?\S+/g,'');const cols=clean.split('|').map(c=>{c=c.trim();if(c.startsWith('empty:')||!c)return null;const[l,k]=c.split(':').map(x=>x.trim());return k?{label:l,key:k}:null}).filter(Boolean);const emptyMsg=clean.match(/empty:\s*([^|]+)/)?.[1]||'No data.';const ths=cols.map(c=>`<th class="fx-th">${esc(c.label)}</th>`).join('');const at=(em||dm)?'<th class="fx-th fx-th-actions">Actions</th>':'';return`<div class="fx-table-wrap"><table class="fx-table" data-fx-table="${esc(binding)}" data-fx-cols='${JSON.stringify(cols.map(c=>c.key))}'${em?` data-fx-edit="${esc(em[2])}" data-fx-edit-method="${esc(em[1])}"`  :''  }${dm?` data-fx-delete="${esc(dm[1])}"`  :''  }><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${cols.length+(em||dm?1:0)}" class="fx-td-empty">${esc(emptyMsg)}</td></tr></tbody></table></div>\n`}
-function rForm(line){const bi=line.indexOf('{');let head=line.slice(5,bi).trim(),action='',method='POST',bpath='#';const ai=head.indexOf('=>');if(ai!==-1){action=head.slice(ai+2).trim();head=head.slice(0,ai).trim()};const pts=head.split(/\s+/);method=pts[0]||'POST';bpath=pts[1]||'#';const fields=extractBody(line).split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());if(!label)return'';const name=label.toLowerCase().replace(/\s+/g,'_');const inp=type==='select'?`<select class="fx-input" name="${esc(name)}"><option value="">Select...</option></select>`:`<input class="fx-input" type="${esc(type||'text')}" name="${esc(name)}" placeholder="${esc(ph||'')}">`;return`<div class="fx-field"><label class="fx-label">${esc(label)}</label>${inp}</div>`}).join('');return`<div class="fx-form-wrap"><form class="fx-form" data-fx-form="${esc(bpath)}" data-fx-method="${esc(method)}" data-fx-action="${esc(action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">Submit</button></form></div>\n`}
+function rForm(line){const bi=line.indexOf('{');let head=line.slice(5,bi).trim(),action='',method='POST',bpath='#';const ai=head.indexOf('=>');if(ai!==-1){action=head.slice(ai+2).trim();head=head.slice(0,ai).trim()};const pts=head.split(/\s+/);method=pts[0]||'POST';bpath=pts[1]||'#';const fields=extractBody(line).split('|').map(f=>{const[label,type,ph]=f.split(':').map(x=>x.trim());if(!label)return'';const name=fieldName(label,type);let inp;if(type==='select'){const opts=(ph||'').split(',').map(o=>o.trim()).filter(Boolean);inp=`<select class="fx-input" name="${esc(name)}">${opts.length?opts.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join(''):'<option value="">Selecione...</option>'}</select>`}else if(type==='textarea'){inp=`<textarea class="fx-input" name="${esc(name)}" placeholder="${esc(ph||'')}"></textarea>`}else{inp=`<input class="fx-input" type="${esc(type||'text')}" name="${esc(name)}" placeholder="${esc(ph||'')}">`}return`<div class="fx-field"><label class="fx-label">${esc(label)}</label>${inp}</div>`}).join('');return`<div class="fx-form-wrap"><form class="fx-form" data-fx-form="${esc(bpath)}" data-fx-method="${esc(method)}" data-fx-action="${esc(action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">Submit</button></form></div>\n`}
 function rPricing(line){const plans=extractBody(line).split('|').map(p=>{const pts=p.trim().split('>').map(x=>x.trim());return{name:pts[0],price:pts[1],desc:pts[2],linkRaw:pts[3]}}).filter(p=>p.name);const cards=plans.map((p,i)=>{let lh='#',ll='Get started';if(p.linkRaw){const m=p.linkRaw.match(/\/([^:]+):(.+)/);if(m){lh='/'+m[1];ll=m[2]}};return`<div class="fx-pricing-card${i===1?' fx-pricing-featured':''}">${i===1?'<div class="fx-pricing-badge">Most popular</div>':''}<div class="fx-pricing-name">${esc(p.name)}</div><div class="fx-pricing-price">${esc(p.price)}</div><p class="fx-pricing-desc">${esc(p.desc)}</p><a href="${esc(lh)}" class="fx-cta fx-pricing-cta">${esc(ll)}</a></div>`}).join('');return`<div class="fx-pricing">${cards}</div>\n`}
 function rFaq(line){const items=extractBody(line).split('|').map(i=>{const idx=i.indexOf('>');return{q:i.slice(0,idx).trim(),a:i.slice(idx+1).trim()}}).filter(i=>i.q);return`<section class="fx-sect"><div class="fx-faq">${items.map(i=>`<div class="fx-faq-item" onclick="this.classList.toggle('open')"><div class="fx-faq-q">${esc(i.q)}<span class="fx-faq-arrow">▸</span></div><div class="fx-faq-a">${esc(i.a)}</div></div>`).join('')}</div></section>\n`}
 function rTestimonial(line){const parts=extractBody(line).split('|').map(x=>x.trim());const imgPart=parts.find(p=>p.startsWith('img:'));const img=imgPart?`<img src="${esc(imgPart.slice(4))}" class="fx-testi-img" alt="${esc(parts[0])}" loading="lazy">`:`<div class="fx-testi-avatar">${esc((parts[0]||'?').charAt(0))}</div>`;return`<section class="fx-testi-wrap"><div class="fx-testi">${img}<blockquote class="fx-testi-quote">"${esc(parts[1]?.replace(/^"|"$/g,''))}"</blockquote><div class="fx-testi-author">${esc(parts[0])}</div></div></section>\n`}
@@ -2355,6 +2476,8 @@ async function startServer(aipFile, port = 3000) {
   const src = fs.readFileSync(aipFile, 'utf8')
   const app = parseApp(src)
   const srv = new AiplangServer()
+  // Diretório do app = pasta do .aip; usado para servir public/ estático
+  srv._appDir = path.dirname(path.resolve(aipFile))
 
   // Validate required env vars up front
   const missingEnvs = []
@@ -2424,13 +2547,17 @@ async function startServer(aipFile, port = 3000) {
   }
 
   // Auth rate limiting (automatic — 20 req/min per IP on /api/auth/*)
-  const _authAttempts = {}
+  const _authAttempts = new Map()
+  let _authWindow = 0
   srv._authRateLimit = (req) => {
     if (!req.path?.includes('/api/auth/')) return false
     const ip = req.socket?.remoteAddress || 'unknown'
-    const key = `${ip}:${Math.floor(Date.now() / 60000)}`
-    _authAttempts[key] = (_authAttempts[key] || 0) + 1
-    return _authAttempts[key] > 20
+    const win = Math.floor(Date.now() / 60000)
+    // Descarta contadores da janela anterior para não vazar memória
+    if (win !== _authWindow) { _authAttempts.clear(); _authWindow = win }
+    const n = (_authAttempts.get(ip) || 0) + 1
+    _authAttempts.set(ip, n)
+    return n > 20
   }
 
   // Routes
@@ -2491,7 +2618,7 @@ async function startServer(aipFile, port = 3000) {
   // ── AI introspection: GET /__aip ──────────────────────────────────
   srv.addRoute('GET', '/__aip', (req, res) => {
     const modelInfo = {}
-    for (const [name, M] of Object.entries(srv._models || {})) {
+    for (const [name, M] of Object.entries(srv.models || {})) {
       modelInfo[name.toLowerCase()] = {
         fields: M.fields ? M.fields.map(f => ({
           name:        f.name,
@@ -2507,7 +2634,7 @@ async function startServer(aipFile, port = 3000) {
         count: (() => { try { return M.count() } catch { return null } })()
       }
     }
-    const routeList = (srv._routes||[]).map(r=>({method:r.method,path:r.path,guards:r.guards||[]}))
+    const routeList = (srv.routes||[]).map(r=>({method:r.method,path:r.path,guards:r.guards||[]}))
     res.json(200, {
       version: VERSION,
       models: modelInfo,
@@ -2528,7 +2655,7 @@ async function startServer(aipFile, port = 3000) {
   })
 
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.11.13',
+    status:'ok', version:VERSION,
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,
@@ -2557,6 +2684,10 @@ module.exports = { startServer, parseApp, Model, getDB, dispatch, on, emit, send
 if (require.main === module) {
   const f=process.argv[2], p=parseInt(process.argv[3]||process.env.PORT||'3000')
   if (!f) { console.error('Usage: node server.js <app.aip> [port]'); process.exit(1) }
+
+  // Um erro isolado num request nunca deve derrubar o servidor inteiro
+  process.on('unhandledRejection', (e) => console.error('[aiplang] Unhandled rejection:', e?.message || e))
+  process.on('uncaughtException',  (e) => console.error('[aiplang] Uncaught exception:', e?.message || e))
 
   // ── Cluster mode: use all CPU cores for maximum throughput ────────
   // Activated by: ~use cluster  OR  CLUSTER=true env var
@@ -2602,7 +2733,9 @@ function setupStripe(config) {
   }
   try {
     const Stripe = require('stripe')
-    STRIPE = new Stripe(key, { apiVersion: '2024-06-20' })
+    // Omitir apiVersion deixa o SDK usar a versão fixada na conta/na lib,
+    // evitando travar numa versão de API defasada
+    STRIPE = new Stripe(key)
     console.log(`[aiplang] Stripe: live mode (${key.startsWith('sk_test') ? 'test key' : 'production key'})`)
   } catch (e) {
     console.log('[aiplang] Stripe: SDK error, using mock')

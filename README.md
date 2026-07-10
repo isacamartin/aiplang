@@ -44,7 +44,7 @@ api POST /api/auth/register {
 nav{MySaaS>/logout:Sign out}
 stats{@users.length:Users}
 table @users { Email:email | Plan:plan | edit PUT /api/users/{id} | delete /api/users/{id} }
-foot{© 2025 MySaaS}
+foot{© MySaaS}
 ```
 
 ---
@@ -147,4 +147,4 @@ npm install -g aiplang
 
 ## License
 
-MIT © 2025 Isac Martin
+MIT © 2026 Isac Martin

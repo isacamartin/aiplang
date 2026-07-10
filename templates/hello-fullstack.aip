@@ -35,4 +35,4 @@ hero{Hello, World!|Full-stack in one file.} animate:blur-in
 stats{@count:Messages sent}
 table @messages { Message:text | empty: No messages yet. Send one below! }
 form POST /api/messages => @messages.push($result) { Message:text:Hello, aiplang! }
-foot{© 2025 aiplang}
+foot{© aiplang}

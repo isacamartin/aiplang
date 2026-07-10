@@ -111,7 +111,7 @@ nav{AnalyticsAI}
 hero{Analytics em tempo real|Entenda seus usuários e escale.>/registro:Começar grátis} animate:blur-in
 row3{chart>Dados em tempo real>Eventos trackeados instantaneamente.|globe>Multi-canal>Google, Meta, Email, Orgânico.|bell>Alertas>Seja notificado de anomalias.} animate:stagger
 form POST /api/auth/login => redirect /dashboard { Email:email | Senha:password }
-foot{© 2025 AnalyticsAI}
+foot{© AnalyticsAI}
 
 ---
 

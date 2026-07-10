@@ -204,7 +204,7 @@ btn{Filter active>@filter = "active"}
 nav{AppName>/dashboard:Dashboard>/login:Sign in}
 hero{Ship faster|The AI-native platform.>/signup:Start free}
 stats{@stats.users:Users|@stats.mrr:MRR|@stats.uptime:Uptime}
-foot{© 2025 AppName}
+foot{© AppName}
 
 ---
 
@@ -226,7 +226,7 @@ table @filtered {
   Name:name | Email:email | Plan:plan | Status:status | MRR:mrr
   empty: No users yet.
 }
-foot{AppName Dashboard © 2025}
+foot{AppName Dashboard ©}
 
 ---
 
@@ -237,7 +237,7 @@ form POST /api/auth/login => redirect /dashboard {
   Email : email : you@company.com
   Password : password :
 }
-foot{© 2025 AppName}
+foot{© AppName}
 ```
 
 ---

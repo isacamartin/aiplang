@@ -106,7 +106,7 @@ nav{ShopAI>/produtos:Produtos>/carrinho:Carrinho>/login:Entrar}
 hero{Tecnologia de ponta|Frete grátis acima de R$299.>/produtos:Ver produtos} animate:blur-in
 stats{@stats.produtos:Produtos|@stats.pedidos:Pedidos|4.9⭐:Avaliação}
 row3{truck>Frete Grátis>Compras acima de R$299.|card>12x sem juros>Cartão de crédito.|bag>Troca fácil>30 dias garantidos.} animate:stagger
-foot{© 2025 ShopAI>/termos:Termos>/privacidade:Privacidade}
+foot{© ShopAI>/termos:Termos>/privacidade:Privacidade}
 
 ---
 
@@ -127,7 +127,7 @@ foot{ShopAI}
 ~theme accent=#f59e0b radius=1rem font=Inter
 nav{ShopAI>/registro:Criar conta}
 form POST /api/auth/login => redirect /conta { Email:email | Senha:password }
-foot{© 2025}
+foot{©}
 
 ---
 
@@ -136,7 +136,7 @@ foot{© 2025}
 nav{ShopAI>/login:Entrar}
 hero{Criar conta|Compre com segurança.}
 form POST /api/auth/registro => redirect /conta { Nome:text | Email:email | Senha:password }
-foot{© 2025}
+foot{©}
 
 ---
 
@@ -157,4 +157,4 @@ foot{ShopAI}
 ~theme accent=#f59e0b radius=1rem font=Inter
 nav{ShopAI}
 hero{Pedido confirmado! 🎉|Obrigado pela sua compra. Você receberá um email de confirmação.>/conta:Ver meus pedidos}
-foot{© 2025 ShopAI}
+foot{© ShopAI}

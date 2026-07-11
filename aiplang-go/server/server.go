@@ -84,6 +84,9 @@ func New(app *fc.AppDef) (*Server, error) {
 	// Static files
 	s.mux.HandleFunc("/static/", s.handleStatic)
 
+	// Public multilingual news module (consumed by the Oplena aggregator)
+	s.registerNewsRoutes()
+
 	return s, nil
 }
 
@@ -413,7 +416,7 @@ func (s *Server) execExpression(expr string, ctx *RequestCtx) interface{} {
 		user, _ := ctx.Vars[varName].(map[string]interface{})
 		if user == nil { user = ctx.Body }
 		if s.jwt != nil {
-			token, _ := s.Server.generateJWT(user)
+			token, _ := s.generateJWT(user)
 			return map[string]interface{}{"token": token, "user": sanitizeUser(user)}
 		}
 	}

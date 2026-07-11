@@ -29,3 +29,9 @@ npm-debug.log*
 
 # Test output
 /tmp/
+
+# Coverage
+coverage.out
+**/coverage.out
+coverage.xml
+coverage/

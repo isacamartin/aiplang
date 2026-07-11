@@ -1,0 +1,43 @@
+image: golang:1.25
+
+definitions:
+  caches:
+    gomod: /root/go/pkg/mod
+  # Live Go modules to build and test. flux2/ is a stale duplicate of aiplang-go
+  # (same module path) and is intentionally excluded.
+  scripts:
+    - &vet-test >-
+      set -e;
+      for mod in . aiplang-go; do
+        echo "== module: $mod ==";
+        ( cd "$mod"
+          && go mod download
+          && go vet ./...
+          && go test -race -coverprofile=coverage.out -covermode=atomic ./...
+          && go tool cover -func=coverage.out | tail -1 );
+      done
+
+pipelines:
+  default:
+    - step:
+        name: Vet + Test + Coverage
+        caches: [gomod]
+        script:
+          - go version
+          - *vet-test
+        artifacts:
+          - coverage.out
+          - aiplang-go/coverage.out
+  branches:
+    main:
+      - step:
+          name: Lint (golangci) + Vet + Test + Coverage
+          caches: [gomod]
+          script:
+            - go version
+            - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+            - golangci-lint run --timeout 5m
+            - *vet-test
+          artifacts:
+            - coverage.out
+            - aiplang-go/coverage.out

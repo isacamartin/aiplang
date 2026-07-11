@@ -26,6 +26,12 @@ func htmlEsc(s string) string {
 	return s
 }
 
+// RenderPageHTML renders a single page to static HTML. It is the public entry
+// point used by the CLI build command (aiplangd/fluxd build).
+func RenderPageHTML(page fc.Page, allPages []fc.Page) string {
+	return renderPageHTML(page, allPages)
+}
+
 func renderPageHTML(page fc.Page, allPages []fc.Page) string {
 	needsJS := len(page.Queries) > 0 || hasInteractiveBlocks(page)
 

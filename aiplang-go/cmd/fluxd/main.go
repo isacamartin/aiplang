@@ -172,7 +172,7 @@ func runMigrate(fluxFile string) {
 		log.Fatalf("[aiplang] migrate error: %v", err)
 	}
 
-	fmt.Println("\n  Migration complete.\n")
+	fmt.Print("\n  Migration complete.\n\n")
 }
 
 func runBuild(fluxFile string) {

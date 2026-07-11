@@ -413,7 +413,7 @@ func (s *Server) execExpression(expr string, ctx *RequestCtx) interface{} {
 		user, _ := ctx.Vars[varName].(map[string]interface{})
 		if user == nil { user = ctx.Body }
 		if s.jwt != nil {
-			token, _ := s.Server.generateJWT(user)
+			token, _ := s.generateJWT(user)
 			return map[string]interface{}{"token": token, "user": sanitizeUser(user)}
 		}
 	}

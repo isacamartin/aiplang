@@ -5,6 +5,11 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
+// Canonical renderer shared byte-for-byte with the playground preview
+// (front/src/lib/aip-render.ts → transpiled here). Used by `build` so a .aip
+// copied out of the playground produces the exact same site. See RENDER_PARITY.
+const { parseAip: sharedRender } = require('../lib/aip-render.js')
+
 
 // ── ANSI colors — sem dependências ───────────────────────────────
 const CLR = {
@@ -970,7 +975,9 @@ if (cmd==='build') {
   let total=0
   const outRoot=path.resolve(outDir)
   for(const page of pages){
-    const html=renderPage(page,pages)
+    // Render with the SAME renderer as the playground so a copied .aip builds
+    // the identical site. Falls back to the legacy renderer if raw is absent.
+    const html=page.raw?sharedRender(page.raw):renderPage(page,pages)
     const fname=page.route==='/'?'index.html':page.route.replace(/^\//,'')+'/index.html'
     const out=path.resolve(outRoot,fname)
     // Impede que uma rota como /../../x escreva fora do diretório de saída
@@ -1129,7 +1136,7 @@ function parsePages(src) {
 function parsePage(src) {
   const lines=src.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'))
   if(!lines.length) return null
-  const p={id:'page',theme:'dark',route:'/',customTheme:null,themeVars:null,state:{},queries:[],blocks:[]}
+  const p={id:'page',theme:'dark',route:'/',customTheme:null,themeVars:null,state:{},queries:[],blocks:[],raw:src}
   for(const line of lines) {
     if(line.startsWith('~var '))       continue  // já processado globalmente
     if(line.startsWith('~component '))  continue  // componente já expandido

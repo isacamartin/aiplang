@@ -66,6 +66,9 @@ func renderPageHTML(page fc.Page, allPages []fc.Page) string {
 	if page.CustomTheme != nil {
 		customCSS = genCustomCSS(page.CustomTheme)
 	}
+	// ~theme accent=/radius=/font=/bg=/text=/grad= — same visual tokens as the
+	// playground / `aiplang build`, applied over the fx-* base CSS.
+	themeCSS := genThemeCSS(page.ThemeVars)
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
@@ -75,7 +78,7 @@ func renderPageHTML(page fc.Page, allPages []fc.Page) string {
 <title>%s</title>
 <link rel="canonical" href="%s">
 <meta name="robots" content="index,follow">
-<style>%s%s</style>
+<style>%s%s%s</style>
 </head>
 <body>
 %s%s
@@ -85,6 +88,7 @@ func renderPageHTML(page fc.Page, allPages []fc.Page) string {
 		htmlEsc(page.Route),
 		getBaseCSS(page.Theme),
 		customCSS,
+		themeCSS,
 		body,
 		hydrateTag,
 	)
@@ -465,6 +469,53 @@ func genCustomCSS(ct *fc.CustomTheme) string {
 	if accent == "" { accent = "#2563eb" }
 	return fmt.Sprintf(`body{background:%s;color:%s}.fx-cta,.fx-btn{background:%s;color:#fff}.fx-nav{background:%scc}.fx-card,.fx-form{border:1px solid %s30}`,
 		ct.BG, ct.Text, accent, ct.BG, ct.Text)
+}
+
+// bgTokCSS turns a bg token ("#hex" or "grad:HEX-HEX") into a CSS value, the
+// same way the playground / `aiplang build` renderer does.
+func bgTokCSS(tok string) string {
+	if strings.HasPrefix(tok, "grad:") {
+		p := strings.SplitN(tok[5:], "-", 2)
+		a := p[0]
+		b := a
+		if len(p) > 1 { b = p[1] }
+		return fmt.Sprintf("linear-gradient(160deg,#%s,#%s)", a, b)
+	}
+	return tok
+}
+
+// genThemeCSS applies the ~theme tokens over the fx-* base CSS so a themed .aip
+// looks the same served by Go as it does in the playground (same accent, page
+// background, text color, font, radius and title gradient).
+func genThemeCSS(v map[string]string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if a := v["accent"]; a != "" {
+		fmt.Fprintf(&b, `.fx-cta,.fx-btn,.fx-pricing-badge{background:%s!important;color:#fff!important}.fx-stat-val{color:%s!important}`, a, a)
+	}
+	if bg := v["bg"]; bg != "" {
+		fmt.Fprintf(&b, `body{background:%s!important}.fx-hero{background:transparent!important}`, bgTokCSS(bg))
+	}
+	if t := v["text"]; t != "" {
+		fmt.Fprintf(&b, `body{color:%s!important}`, t)
+	}
+	if f := v["font"]; f != "" {
+		fam := strings.ReplaceAll(f, " ", "+")
+		fmt.Fprintf(&b, `@import url('https://fonts.googleapis.com/css2?family=%s:wght@400;600;800&display=swap');body{font-family:'%s',system-ui,sans-serif!important}`, fam, f)
+	}
+	if r := v["radius"]; r != "" {
+		fmt.Fprintf(&b, `.fx-card,.fx-form,.fx-btn,.fx-input,.fx-cta,.fx-pricing-card{border-radius:%s!important}`, r)
+	}
+	if g := v["grad"]; strings.HasPrefix(g, "grad:") {
+		p := strings.SplitN(g[5:], "-", 2)
+		a := p[0]
+		c := a
+		if len(p) > 1 { c = p[1] }
+		fmt.Fprintf(&b, `.fx-title{background:linear-gradient(90deg,#%s,#%s)!important;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}`, a, c)
+	}
+	return b.String()
 }
 
 func getBaseCSS(theme string) string {

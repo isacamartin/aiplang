@@ -104,6 +104,7 @@ type Page struct {
 	Theme       string
 	Route       string
 	CustomTheme *CustomTheme
+	ThemeVars   map[string]string // ~theme accent=.. radius=.. font=.. bg=.. text=.. grad=..
 	State       map[string]string
 	Queries     []LifecycleQuery
 	Blocks      []Block
@@ -562,6 +563,16 @@ func parsePage(src string) (*Page, error) {
 					page.CustomTheme = ct
 				} else {
 					page.Theme = t
+				}
+			}
+
+		case strings.HasPrefix(line, "~theme"):
+			if page.ThemeVars == nil {
+				page.ThemeVars = map[string]string{}
+			}
+			for _, pair := range strings.Fields(strings.TrimSpace(line[len("~theme"):])) {
+				if eq := strings.Index(pair, "="); eq != -1 {
+					page.ThemeVars[pair[:eq]] = pair[eq+1:]
 				}
 			}
 

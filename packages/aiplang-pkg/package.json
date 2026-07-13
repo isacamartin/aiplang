@@ -1,6 +1,6 @@
 {
   "name": "aiplang",
-  "version": "2.15.0",
+  "version": "2.16.0",
   "description": "AI-first web language. One .aip file = complete app. Frontend + backend + database + auth.",
   "keywords": [
     "aiplang",
@@ -29,6 +29,7 @@
   "main": "./runtime/aiplang-runtime.js",
   "files": [
     "bin/",
+    "lib/",
     "runtime/",
     "server/",
     "README.md",

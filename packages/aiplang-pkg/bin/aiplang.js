@@ -1027,7 +1027,8 @@ if (cmd==='serve'||cmd==='dev') {
         .map(f=>fs.readFileSync(path.join(pagesDir,f),'utf8')).join('\n---\n')
       const pages = parsePages(src)
       const byRoute = {}
-      for (const pg of pages) byRoute[pg.route] = renderPage(pg, pages).replace('</body>', RELOAD_JS+'</body>')
+      // Same shared renderer as `build` and the playground preview.
+      for (const pg of pages) byRoute[pg.route] = (pg.raw ? sharedRender(pg.raw) : renderPage(pg, pages)).replace('</body>', RELOAD_JS+'</body>')
       return byRoute
     } catch (e) { return { __error: e.message } }
   }

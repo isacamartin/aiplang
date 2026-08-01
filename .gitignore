@@ -35,3 +35,6 @@ coverage.out
 **/coverage.out
 coverage.xml
 coverage/
+
+graphify-out/
+.graphifyignore

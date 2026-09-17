@@ -1,5 +1,3 @@
-// @GENERATED from front/src/lib/aip-render.ts — do not edit here.
-// Regenerate: see front/docs/RENDER_PARITY.md
 "use strict";
 // Canonical aiplang static renderer — SINGLE SOURCE for the playground
 // preview AND the aiplang runtime (aiplang build). Keep this file

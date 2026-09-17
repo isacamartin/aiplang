@@ -7,6 +7,7 @@ node_modules/
 dist/
 _site/
 *.db
+*.tgz
 
 # Env
 .env

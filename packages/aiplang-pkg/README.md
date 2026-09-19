@@ -5,20 +5,44 @@
 [![Tests](https://github.com/isacamartin/aiplang/actions/workflows/tests.yml/badge.svg)](https://github.com/isacamartin/aiplang/actions/workflows/tests.yml)
 [![npm](https://img.shields.io/npm/v/aiplang)](https://npmjs.com/package/aiplang)
 
+## Quickstart
+
+### Install
+
 ```bash
-# npm
-npx aiplang init my-app
+# Global install
+npm install -g aiplang
 
-# yarn
-yarn dlx aiplang init my-app
-
-# pnpm
-pnpm dlx aiplang init my-app
-
-cd my-app && npx aiplang serve
+# Or run directly without installing
+npx aiplang serve
 ```
 
-Ask Claude to generate a page → paste into `pages/home.aip` → see it live.
+### Build your first page (5 min)
+
+Save this as `pages/home.aip`:
+
+```aip
+%home dark /
+~theme accent=#6366f1 radius=1rem font=Inter
+nav{aiplang}
+hero{Hello, World!|Built with aiplang.} animate:blur-in
+foot{© 2026 aiplang}
+```
+
+Then build and preview:
+
+```bash
+# Run from your project directory
+npx aiplang serve          # live dev server with hot reload
+# or
+npx aiplang build pages/   # static HTML → dist/
+```
+
+Open `http://localhost:3000` and edit the `.aip` file to see changes live.
+
+### Same render on the playground
+
+Paste the same `.aip` code into [aiplang playground](https://aiplang.com/playground) — you'll see the exact same render. This works because the renderer is identical: `lib/aip-render.js` (built from `front/src/lib/aip-render.ts`).
 
 ---
 

@@ -27,6 +27,9 @@
     "aiplang": "./bin/aiplang.js"
   },
   "main": "./runtime/aiplang-runtime.js",
+  "exports": {
+    ".": "./runtime/aiplang-runtime.js"
+  },
   "files": [
     "bin/",
     "lib/",

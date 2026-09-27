@@ -1,11 +1,25 @@
 # Publishing aiplang@2.16.0 to npm
 
-## Checklist
+## Pre-publish Checklist (for isac approval)
 
-- [x] Version aligned: npm currently has 2.11.13, source evolved to 2.16.0 with interactive layer fixes
-- [x] package.json audited: all fields correct (name, version, bin, main, exports, files, engines.node >=20, license, repository)
-- [x] Build clean: aip-render.js regenerated from front/src/lib/aip-render.ts, tarball generated without errors
-- [x] Smoke test: bin (aiplang --version, --help) verified; npm pack successful
+### Ready ✅
+- [x] Version bump: 2.11.13 → 2.16.0 (5 minor versions, ready to publish)
+- [x] package.json complete: name, version, type (commonjs), description, keywords, author, license (MIT), repository, homepage, bugs, bin, main, exports, files, engines (node>=20), publishConfig (access: public), dependencies
+- [x] README.md present with quickstart: `npm install -g aiplang` + 5-min example + commands + features documented
+- [x] LICENSE present: MIT with Copyright 2024-2026 isacamartin (correct title and dates)
+- [x] aiplang-knowledge.md present: complete LLM reference for language syntax
+- [x] Build artifacts: aip-render.js transpiled from TypeScript, regenerated cleanly
+- [x] npm pack: tarball generated (aiplang-2.16.0.tgz, 126.6 KB, 9 files, 469.8 KB unpacked)
+- [x] Tarball content verified: package.json, README.md, LICENSE, aiplang-knowledge.md, bin/aiplang.js, lib/aip-render.js, runtime/aiplang-runtime.js, runtime/aiplang-hydrate.js, server/server.js
+- [x] .npmignore configured correctly: excludes node_modules, .env, *.db, *.tgz, tests, .github
+- [x] No build artifacts in tarball: clean, ready for install
+
+### Waiting for isac decision ⚠️
+- [ ] **npm registry**: Package name `aiplang` available/occupied? Currently published at v2.11.13 on npm registry (verified 2026-09-26). Upgrade to v2.16.0 approved?
+- [ ] **Dependencies**: `uWebSockets.js` from GitHub (github:uNetworking/uWebSockets.js#v20.44.0) and `better-sqlite3` (native, needs compilation). Installation may fail in build-tools-free environments. Acceptable trade-off?
+- [ ] **2FA**: npm account (`isacamartin`) has 2FA enabled? If yes, have authenticator app ready during `npm login` and `npm publish`
+- [ ] **CI/CD**: Is there an automated release pipeline, or is this a manual publish? (affects post-publish tagging workflow)
+- [ ] **Publicity**: Should the release be announced after publish? (e.g., GitHub releases, npm trending, social)
 
 ## Version History
 
@@ -91,10 +105,11 @@
 - Interactive layer reliability improvements
 - Quality gate updates (gitleaks, lint, npm audit passing)
 
-**Files changed:**
-- `packages/aiplang-pkg/package.json` — added explicit `exports` field
-- `packages/aiplang-pkg/lib/aip-render.js` — regenerated from TypeScript source
-- `.gitignore` — added *.tgz to ignore build artifacts
+**Files changed in prep for 2.16.0 publish:**
+- `packages/aiplang-pkg/package.json` — added `type: "commonjs"` (explicit module type), `publishConfig.access: "public"` (npm public registry), `LICENSE` to `files` array
+- `packages/aiplang-pkg/lib/aip-render.js` — regenerated from TypeScript source (front/src/lib/aip-render.ts) for renderer parity
+- `.npmignore` — added `*.tgz` to exclude build artifacts from tarball
+- `README.md` — updated template list and quickstart
 
 ## Post-publish steps
 
@@ -110,7 +125,10 @@
 
 ---
 
-**Generated**: 2026-09-19  
+**Prepared**: 2026-09-26  
 **Package**: aiplang@2.16.0  
-**Tarball**: aiplang-2.16.0.tgz (125.8 kB)  
-**Shasum**: 8dd740a6f8396c7eb1ddc81f049e74ab0c5dc6a1
+**Tarball**: aiplang-2.16.0.tgz (126.6 kB, 9 files, 469.8 kB unpacked)  
+**Node requirement**: >=20 (enforced in package.json engines)  
+**Current npm version**: 2.11.13 (will be superseded by 2.16.0)  
+**Git branch**: fix/render-parity-sync  
+**Status**: Ready for `npm publish` (awaiting isac approval via checklist)

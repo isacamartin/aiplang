@@ -1,6 +1,7 @@
 {
   "name": "aiplang",
   "version": "2.16.0",
+  "type": "commonjs",
   "description": "AI-first web language. One .aip file = complete app. Frontend + backend + database + auth.",
   "keywords": [
     "aiplang",
@@ -17,14 +18,17 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/isacamartin/aiplang.git"
+    "url": "git+https://github.com/isacamartin/aiplang.git"
   },
   "homepage": "https://aiplang.com",
   "bugs": {
     "url": "https://github.com/isacamartin/aiplang/issues"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
-    "aiplang": "./bin/aiplang.js"
+    "aiplang": "bin/aiplang.js"
   },
   "main": "./runtime/aiplang-runtime.js",
   "exports": {
@@ -36,7 +40,8 @@
     "runtime/",
     "server/",
     "README.md",
-    "aiplang-knowledge.md"
+    "aiplang-knowledge.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"

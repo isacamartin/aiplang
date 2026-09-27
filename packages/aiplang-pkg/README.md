@@ -97,7 +97,7 @@ npx aiplang serve                    # dev server + hot reload
 npx aiplang build pages/             # compile → static HTML
 npx aiplang start app.aip            # full-stack Node.js server
 npx aiplang init my-app              # create project
-npx aiplang init my-app --template saas|landing|crud|dashboard|blog|ecommerce|todo|analytics|chat|hello
+npx aiplang init my-app --template saas|landing|crud|dashboard|blog|portfolio|hello
 npx aiplang template list            # list saved templates
 npx aiplang template save my-tpl     # save current project as template
 ```
@@ -121,12 +121,14 @@ npx aiplang template save my-tpl     # save current project as template
 
 ## Templates
 
-Ready-to-use templates in `/templates`:
-- `blog.aip` — Blog with comments, auth, pagination, cache
-- `ecommerce.aip` — Shop with Stripe checkout
-- `todo.aip` — Todo app with auth + priorities
-- `analytics.aip` — Analytics dashboard with cache
-- `chat.aip` — Real-time chat with polling
+Ready-to-use templates:
+- `saas` — Full-stack SaaS with auth, users, dashboard, pricing
+- `landing` — Marketing landing page with features
+- `blog` — Blog with posts and pagination
+- `crud` — Item management app with forms
+- `dashboard` — Analytics dashboard with stats
+- `portfolio` — Portfolio with gallery and testimonials
+- `hello` — Simple hello world starter
 
 ## Security
 
